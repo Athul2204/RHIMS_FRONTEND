@@ -6,6 +6,7 @@ import {
   getStaffList, createStaff, patchStaff, 
   deactivateStaff, reactivateStaff 
 } from "../api/adminApi";
+import useBranchScope from "../hooks/useBranchScope";
 
 const G = "#F59E0B"; // Lab Tech theme orange
 
@@ -28,6 +29,7 @@ const EMPTY = {
   user: { first_name: "", last_name: "", email: "", username: "", password: "" },
   role: "Lab Technician", phone: "", date_of_birth: "", qualification: "BSc MLT",
   joining_date: new Date().toISOString().split("T")[0], address: "",
+  branch: "",
 };
 
 const Modal = ({ title, children, onClose }) => (
@@ -54,6 +56,7 @@ const Field = ({ label, children, required }) => (
 const inp = { width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid #E2E8F0", outline: "none", fontSize: "14px", boxSizing: "border-box" };
 
 export default function LabTechsPage() {
+  const { isGroupAdmin, branches, selectedBranch, listParams } = useBranchScope();
   const [list, setList]             = useState([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState("");
@@ -71,8 +74,13 @@ export default function LabTechsPage() {
   const [editTarget, setEditTarget] = useState(null);
 
   const buildUrl = useCallback(() => {
-    return "/administration/staff/?role=Lab Technician";
-  }, []);
+    let url = "/administration/staff/?role=Lab Technician";
+    // Group admin narrowed the header switcher to one branch — otherwise
+    // omitted entirely so the backend returns the unfiltered cross-branch
+    // list (or, for a non-group-admin, silently ignores it either way).
+    if (listParams.branch) url += `&branch=${encodeURIComponent(listParams.branch)}`;
+    return url;
+  }, [listParams]);
 
   const load = useCallback((arg = null) => {
     setLoading(true);
@@ -97,13 +105,21 @@ export default function LabTechsPage() {
     return name.includes(q) || s.user?.email?.toLowerCase().includes(q) || s.staff_code?.toLowerCase().includes(q);
   });
 
-  const openAdd = () => { setForm(EMPTY); setFormError(""); setModal("add"); };
+  const openAdd = () => {
+    // Default (and see below: lock) the new record's branch to whatever
+    // is currently narrowed in the header switcher, so "viewing Madathara"
+    // can't silently create a record under Trivandrum.
+    setForm({ ...EMPTY, branch: selectedBranch ?? "" });
+    setFormError("");
+    setModal("add");
+  };
   const openEdit = (s) => {
     setEditTarget(s);
     setForm({
       user: { first_name: s.user?.first_name ?? "", last_name: s.user?.last_name ?? "", email: s.user?.email ?? "", username: s.user?.username ?? "", password: "" },
       role: "Lab Technician", phone: s.phone ?? "", date_of_birth: s.date_of_birth ?? "",
       qualification: s.qualification ?? "BSc MLT", joining_date: s.joining_date ?? "", address: s.address ?? "",
+      branch: s.branch ?? "",
     });
     setFormError(""); setModal("edit");
   };
@@ -122,6 +138,15 @@ export default function LabTechsPage() {
       const payload = { ...form };
       if (modal === "edit" && !payload.user.password) delete payload.user.password;
       if (!payload.user.username) delete payload.user.username;
+
+      // Branch is only ever picked explicitly by a group admin — a
+      // branch-scoped admin's staff always belongs to their own branch,
+      // resolved automatically server-side.
+      if (!isGroupAdmin || !payload.branch) {
+        delete payload.branch;
+      } else {
+        payload.branch = Number(payload.branch);
+      }
 
       if (modal === "add") await createStaff(payload);
       else await patchStaff(editTarget.id, payload);
@@ -214,6 +239,14 @@ export default function LabTechsPage() {
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginBottom: "14px" }}>
                   <div style={{ fontSize: "12px", color: "#64748B" }}><strong>Qualification:</strong> {s.qualification}</div>
                   <div style={{ fontSize: "12px", color: "#64748B" }}><strong>Phone:</strong> {s.phone ?? "—"}</div>
+                  {isGroupAdmin && (
+                    <div style={{ fontSize: "12px", color: "#64748B" }}>
+                      <strong>Branch:</strong> {(() => {
+                        const b = branches.find(b => b.branch_id === s.branch);
+                        return b ? `${b.name} (${b.code})` : "—";
+                      })()}
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ display: "flex", gap: "8px", borderTop: "1px solid #F8FAFC", paddingTop: "12px" }}>
@@ -257,6 +290,21 @@ export default function LabTechsPage() {
               <Field label="Qualification" required><input style={inp} value={form.qualification} onChange={e => handleChange("qualification", e.target.value)} /></Field>
               <Field label="Joining Date"><input style={inp} type="date" value={form.joining_date} onChange={e => handleChange("joining_date", e.target.value)} /></Field>
               <Field label="Date of Birth"><input style={inp} type="date" value={form.date_of_birth} onChange={e => handleChange("date_of_birth", e.target.value)} /></Field>
+              {isGroupAdmin && (
+                <Field label="Branch" required>
+                  {modal === "add" && selectedBranch ? (
+                    <div style={{ ...inp, display: "flex", alignItems: "center", justifyContent: "space-between", background: "#F8FAFC", color: "#475569" }}>
+                      <span>{branches.find(b => b.branch_id === selectedBranch)?.name ?? "Selected branch"}</span>
+                      <span style={{ fontSize: "11px", color: "#94A3B8" }}>locked to header selection</span>
+                    </div>
+                  ) : (
+                    <select style={{ ...inp, cursor: "pointer" }} value={form.branch} onChange={e => handleChange("branch", e.target.value)}>
+                      <option value="">— Select a branch —</option>
+                      {branches.map(b => <option key={b.branch_id} value={b.branch_id}>{b.name} ({b.code})</option>)}
+                    </select>
+                  )}
+                </Field>
+              )}
               <div style={{ gridColumn: "1/-1" }}><Field label="Address"><input style={inp} value={form.address} onChange={e => handleChange("address", e.target.value)} /></Field></div>
             </div>
           </div>

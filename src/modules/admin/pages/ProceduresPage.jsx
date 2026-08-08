@@ -4,6 +4,7 @@ import { Toast, useToast } from "../../../components/shared/Toast";
 import {
   getProcedureList, createProcedure, patchProcedure, deleteProcedure
 } from "../api/adminApi";
+import useBranchScope from "../hooks/useBranchScope";
 
 const G = "#16A34A";
 
@@ -25,7 +26,7 @@ const ICONS = {
   rupee:  "M6 3h12 M6 8h12 M6 13h8a4 4 0 0 1 0 8H6l3-4H6",
 };
 
-const EMPTY = { name: "", description: "", charge: "", is_active: true };
+const EMPTY = { name: "", description: "", charge: "", is_active: true, branch: "" };
 
 const Modal = ({ title, children, onClose }) => (
   <div style={{ position:"fixed", inset:0, background:"rgba(15,23,42,0.45)", display:"flex", alignItems:"center", justifyContent:"center", padding:"20px", zIndex:1000, backdropFilter:"blur(4px)" }}>
@@ -66,6 +67,7 @@ const Badge = ({ active }) => (
 );
 
 export default function ProceduresPage() {
+  const { isGroupAdmin, branches, listParams } = useBranchScope();
   const [list, setList]         = useState([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState("");
@@ -85,7 +87,9 @@ export default function ProceduresPage() {
 
   const load = useCallback((arg = {}) => {
     setLoading(true);
-    const params = typeof arg === "string" ? arg : { include_inactive: showInactive ? "true" : undefined };
+    const params = typeof arg === "string"
+      ? arg
+      : { include_inactive: showInactive ? "true" : undefined, ...listParams };
     getProcedureList(params)
       .then(d => {
         setList(d.results ?? []);
@@ -96,7 +100,7 @@ export default function ProceduresPage() {
       })
       .catch(() => setError("Failed to load procedures."))
       .finally(() => setLoading(false));
-  }, [showInactive]);
+  }, [showInactive, listParams]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -109,16 +113,25 @@ export default function ProceduresPage() {
   const openAdd = () => { setForm(EMPTY); setFormError(""); setModal("add"); };
   const openEdit = (p) => {
     setEditTarget(p);
-    setForm({ name: p.name, description: p.description ?? "", charge: p.charge ?? "", is_active: p.is_active });
+    setForm({ name: p.name, description: p.description ?? "", charge: p.charge ?? "", is_active: p.is_active, branch: p.branch ?? "" });
     setFormError(""); setModal("edit");
   };
 
   const handleChange = (f, v) => setForm(prev => ({ ...prev, [f]: v }));
 
   const handleSubmit = async () => {
+    if (isGroupAdmin && modal === "add" && !form.branch) {
+      setFormError("Branch is required.");
+      return;
+    }
     setSubmitting(true); setFormError("");
     try {
       const payload = { ...form, charge: parseFloat(form.charge) || 0 };
+      if (!isGroupAdmin || !payload.branch) {
+        delete payload.branch;
+      } else {
+        payload.branch = Number(payload.branch);
+      }
       if (modal === "add") {
         await createProcedure(payload);
         showToast("Procedure created!");
@@ -215,7 +228,11 @@ export default function ProceduresPage() {
             <table style={{ width:"100%", borderCollapse:"collapse" }}>
               <thead>
                 <tr style={{ borderBottom:"2px solid #F1F5F9", background:"#FAFBFC" }}>
-                  {["Procedure Name", "Description", "Charge (₹)", "Status", "Actions"].map(h => (
+                  {[
+                    "Procedure Name", "Description", "Charge (₹)",
+                    ...(isGroupAdmin ? ["Branch"] : []),
+                    "Status", "Actions",
+                  ].map(h => (
                     <th key={h} style={{ padding:"11px 16px", textAlign:"left", fontSize:"11px", fontWeight:700, color:"#94A3B8", textTransform:"uppercase", letterSpacing:"0.6px", whiteSpace:"nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -240,6 +257,14 @@ export default function ProceduresPage() {
                     <td style={{ padding:"12px 16px" }}>
                       <span style={{ fontSize:"14px", fontWeight:600, color:"#0F172A" }}>₹{parseFloat(p.charge).toLocaleString("en-IN", { minimumFractionDigits:2, maximumFractionDigits:2 })}</span>
                     </td>
+                    {isGroupAdmin && (
+                      <td style={{ padding:"12px 16px", fontSize:"12px", color:"#475569", whiteSpace:"nowrap" }}>
+                        {(() => {
+                          const b = branches.find(b => b.branch_id === p.branch);
+                          return b ? `${b.name} (${b.code})` : "—";
+                        })()}
+                      </td>
+                    )}
                     <td style={{ padding:"12px 16px" }}><Badge active={p.is_active} /></td>
                     <td style={{ padding:"12px 16px" }}>
                       <div style={{ display:"flex", gap:"8px" }}>
@@ -281,6 +306,14 @@ export default function ProceduresPage() {
           <Field label="Charge (₹)" required>
             <input style={inp} type="number" min="0" step="0.01" value={form.charge} onChange={e => handleChange("charge", e.target.value)} placeholder="0.00" />
           </Field>
+          {isGroupAdmin && (
+            <Field label="Branch" required>
+              <select style={{ ...inp, cursor:"pointer" }} value={form.branch} onChange={e => handleChange("branch", e.target.value)}>
+                <option value="">— Select a branch —</option>
+                {branches.map(b => <option key={b.branch_id} value={b.branch_id}>{b.name} ({b.code})</option>)}
+              </select>
+            </Field>
+          )}
           <Field label="Description">
             <textarea style={{ ...inp, minHeight:"80px", resize:"vertical" }} value={form.description} onChange={e => handleChange("description", e.target.value)} placeholder="Brief description of the procedure…" />
           </Field>

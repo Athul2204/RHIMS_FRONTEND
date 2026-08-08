@@ -22,6 +22,7 @@ import {
 import API from "../../../api";
 import MedicineAutocomplete from "../components/MedicineAutocomplete";
 import { groupLabRequestItems, subTestIdsCoveredByGroups } from "../../../utils/labItemGrouping";
+import { flattenFormError } from "../../../utils/formErrors";
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
 const G        = "#16A34A";
@@ -113,6 +114,11 @@ const ROUTE_LABELS = { ORAL:"Oral",IV:"IV",IM:"IM",SC:"SC",TOPICAL:"Topical",NAS
 // blank=True but NOT null=True, so a JS `null` value is rejected — always send "" for "not specified").
 const MEAL_TIMING_OPTS = ["", "BEFORE_MEALS", "WITH_MEALS", "AFTER_MEALS"];
 const MEAL_TIMING_LABELS = { "": "Not Specified", BEFORE_MEALS: "Before Meals", WITH_MEALS: "With Meals", AFTER_MEALS: "After Meals" };
+// NOTE: backend PRNReasonChoices is a fixed enum (doctor/models.py) — prn_reason
+// must be one of these exact codes, not free text, or PrescriptionItem.clean()
+// rejects it with a 400 ("... is not a valid choice").
+const PRN_REASON_OPTS = ["FEVER", "PAIN", "ALLERGY", "COUGH", "NAUSEA", "OTHER"];
+const PRN_REASON_LABELS = { FEVER: "Fever", PAIN: "Pain", ALLERGY: "Allergic Reaction", COUGH: "Cough", NAUSEA: "Nausea/Vomiting", OTHER: "Other (specify)" };
 
 // ─── ToggleGroup Component ────────────────────────────────────────────────────
 function ToggleGroup({ options, labels, value, onChange }) {
@@ -275,12 +281,37 @@ function ConsultationAddItemModal({ onClose, onAdded, prescriptionExists = false
       setError("Dose quantity is required");
       return;
     }
+    if (Number(form.dose_quantity) <= 0) {
+      setError("Dose must be greater than zero");
+      return;
+    }
     if (!form.frequency) {
       setError("Frequency is required");
       return;
     }
     if (!form.duration_days && form.frequency !== "STAT") {
       setError("Duration is required");
+      return;
+    }
+    // Mirrors PrescriptionItem.clean(): duration must be 1-30 days when given.
+    if (form.duration_days && (Number(form.duration_days) < 1 || Number(form.duration_days) > 30)) {
+      setError("Duration must be between 1 and 30 days");
+      return;
+    }
+    if (form.frequency === "SOS" && !form.prn_reason) {
+      setError("Reason for use is required for As Needed (PRN/SOS) medicines");
+      return;
+    }
+    if (form.frequency === "SOS" && form.prn_reason === "OTHER" && !form.prn_reason_other.trim()) {
+      setError("Please specify the reason when \"Other\" is selected");
+      return;
+    }
+    // Manual quantity entry isn't gated by the auto-calc, so a bad value here
+    // (0, negative, or non-numeric) would otherwise reach the backend
+    // untouched — quantity is a PositiveIntegerField, so this isn't just a
+    // 400 risk, it can hit the DB check constraint directly.
+    if (form.is_manual_quantity && Number(form.quantity) <= 0) {
+      setError("Quantity must be greater than zero");
       return;
     }
 
@@ -393,7 +424,13 @@ function ConsultationAddItemModal({ onClose, onAdded, prescriptionExists = false
               value={form.frequency}
               onChange={(v) => {
                 set("frequency", v);
-                if (v !== "SOS") set("prn_reason", "");
+                // Backend rejects prn_reason/prn_reason_other on any non-SOS item
+                // (PrescriptionItem.clean()), so both must be cleared together —
+                // leaving prn_reason_other behind after switching away from SOS
+                // (e.g. after picking "Other" and typing a reason) would 400.
+                if (v !== "SOS") {
+                  setForm(f => ({ ...f, prn_reason: "", prn_reason_other: "" }));
+                }
               }}
             />
           </div>
@@ -402,14 +439,30 @@ function ConsultationAddItemModal({ onClose, onAdded, prescriptionExists = false
             <div style={{ padding: "12px 14px", borderRadius: 10, background: "#FFFBEB", border: "1px solid #FDE68A", marginBottom: 18 }}>
               <div style={{ fontSize: 11.5, fontWeight: 700, color: "#C2410C", marginBottom: 10 }}>As Needed (PRN) — Additional Fields</div>
               <div style={{ marginBottom: 12 }}>
-                <label style={{ fontSize: 11.5, fontWeight: 600, color: "#374151", display: "block", marginBottom: 5 }}>Reason for PRN</label>
-                <input
+                <label style={{ fontSize: 11.5, fontWeight: 600, color: "#374151", display: "block", marginBottom: 5 }}>
+                  Reason for PRN <span style={{ color: "#EF4444" }}>*</span>
+                </label>
+                <ToggleGroup
+                  options={PRN_REASON_OPTS}
+                  labels={PRN_REASON_LABELS}
                   value={form.prn_reason}
-                  onChange={e => set("prn_reason", e.target.value)}
-                  placeholder="e.g. Pain, Fever, Cough"
-                  style={INP}
+                  onChange={v => set("prn_reason", v)}
                 />
               </div>
+              {form.prn_reason === "OTHER" && (
+                <div style={{ marginBottom: 12 }}>
+                  <label style={{ fontSize: 11.5, fontWeight: 600, color: "#374151", display: "block", marginBottom: 5 }}>
+                    Specify reason <span style={{ color: "#EF4444" }}>*</span>
+                  </label>
+                  <input
+                    value={form.prn_reason_other}
+                    onChange={e => set("prn_reason_other", e.target.value)}
+                    placeholder="e.g. Occasional headache"
+                    maxLength={200}
+                    style={INP}
+                  />
+                </div>
+              )}
               {form.prn_reason && (
                 <div style={{ marginTop: 12 }}>
                   <label style={{ fontSize: 11.5, fontWeight: 600, color: "#374151", display: "block", marginBottom: 5 }}>Max daily dose</label>
@@ -417,6 +470,7 @@ function ConsultationAddItemModal({ onClose, onAdded, prescriptionExists = false
                     value={form.max_daily_dose}
                     onChange={e => set("max_daily_dose", e.target.value)}
                     placeholder="e.g. 4 tablets/day"
+                    maxLength={100}
                     style={INP}
                   />
                 </div>
@@ -651,7 +705,7 @@ function CompleteModal({ id, detail, onClose, onDone }) {
       await completeConsultation(id);
       onDone();
     } catch (e) {
-      setErr(String(e) || "Failed to complete consultation.");
+      setErr(flattenFormError(e, "Failed to complete consultation."));
     } finally { setSaving(false); }
   };
 
@@ -926,7 +980,7 @@ export default function ConsultationDetailPage() {
       setHistory(past || []);
       setHistoryLoaded(true);
     } catch (e) {
-      setHistoryError(String(e) || "Failed to load previous history");
+      setHistoryError(flattenFormError(e, "Failed to load previous history"));
     } finally {
       setHistoryLoading(false);
     }
@@ -953,7 +1007,7 @@ export default function ConsultationDetailPage() {
       setIsEditing(false);
       await load();
     } catch(e) {
-      showToast(String(e) || "Failed to save", "error");
+      showToast(flattenFormError(e, "Failed to save"), "error");
     } finally { setSaving(false); }
   };
 
@@ -970,7 +1024,7 @@ export default function ConsultationDetailPage() {
       setSelectedTests([]); setSelectedGroups([]); setLabNotes(""); setShowLabForm(false); setLabSearchQuery("");
       await load();
     } catch(e) {
-      showToast(String(e) || "Failed to create lab request", "error");
+      showToast(flattenFormError(e, "Failed to create lab request"), "error");
     } finally { setCreatingLab(false); }
   };
 
@@ -1015,7 +1069,7 @@ export default function ConsultationDetailPage() {
       setRxNotes("");
       await load();
     } catch (e) {
-      showToast(String(e) || "Failed to create prescription", "error");
+      showToast(flattenFormError(e, "Failed to create prescription"), "error");
     } finally {
       setCreatingRx(false);
     }
@@ -1063,7 +1117,7 @@ export default function ConsultationDetailPage() {
       setAddMedRxId(null);
       await load();
     } catch (e) {
-      showToast(String(e) || "Failed to add medicine", "error");
+      showToast(flattenFormError(e, "Failed to add medicine"), "error");
     } finally {
       setAddingMedItem(false);
     }
@@ -1078,7 +1132,7 @@ export default function ConsultationDetailPage() {
       showToast("Medicine removed", "success");
       await load();
     } catch (e) {
-      showToast(String(e) || "Failed to remove medicine", "error");
+      showToast(flattenFormError(e, "Failed to remove medicine"), "error");
     } finally {
       setDeletingItemKey(null);
     }
@@ -1167,6 +1221,17 @@ export default function ConsultationDetailPage() {
                 {detail.patient_name || "Unknown Patient"}
               </span>
               <StatusBadge status={detail.status} />
+              {/* Home Visit indicator — sourced from the linked bill's consultation_type.
+                  NOTE: the doctor consultation detail endpoint currently serializes
+                  consultation_bill as a bare id, not a nested object, so this only
+                  renders once/if that field is nested with consultation_type included;
+                  written defensively (optional chaining) so it's a no-op until then. */}
+              {detail.consultation_bill?.consultation_type === "HOME_VISIT" && (
+                <span style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"3px 10px",
+                  borderRadius:20, fontSize:11, fontWeight:700, background:"#FDF4FF", color:"#A21CAF" }}>
+                  🏠 Home Visit
+                </span>
+              )}
             </div>
             <p style={{ fontSize:11, color:MUTED, margin:0 }}>
               MRD: {detail.patient_mrd || "—"} · OP: {detail.op_number || "—"}
@@ -1990,7 +2055,7 @@ export default function ConsultationDetailPage() {
                             </div>
                             <p style={{ fontSize:11.5, color:MUTED, margin:"4px 0 0" }}>
                               {h.consultation_date}
-                              {h.doctor_fullname ? ` · Dr. ${h.doctor_fullname}` : ""}
+                              {h.doctor_fullname ? ` · ${h.doctor_fullname}` : ""}
                               {h.chief_complaint ? ` · ${h.chief_complaint}` : ""}
                             </p>
                           </div>

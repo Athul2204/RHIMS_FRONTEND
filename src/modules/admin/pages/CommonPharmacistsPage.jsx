@@ -12,6 +12,7 @@ export default function CommonPharmacistsPage() {
       entityLabelPlural="Common Pharmacists"
       idField="common_pharmacist_id"
       basePath="/administration/common-pharmacists/"
+      accentColor="#8B5CF6"
       api={{
         list:       getCommonPharmacistList,
         create:     createCommonPharmacist,

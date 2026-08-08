@@ -1,7 +1,8 @@
 // src/modules/manager/pages/BillsPage.jsx
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { getAllBills, getBillDetail } from "../api/managerApi";
+import { getAllBills, getBillDetail, getFinanceDashboard } from "../api/managerApi";
+import ExportButtons from "../../../components/shared/ExportButtons";
 
 const ACCENT = "#6366F1";
 const fmt = n => `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -78,6 +79,13 @@ export default function BillsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [failedSources, setFailedSources] = useState([]);
+  // Other Income isn't a "bill" — it lives in a separate model with no
+  // source/status shape AllBillsView returns — so it can't be derived from
+  // `bills` like the other cards. Pulled from the same Finance Dashboard
+  // endpoint the manager dashboard uses, over the same date range, so this
+  // page's revenue figure matches FinanceDashboardView's total_revenue
+  // (Reception + Pharmacy + Other Income) instead of silently omitting it.
+  const [otherIncome, setOtherIncome] = useState({ amount: 0, count: 0, lab_commission: 0 });
   const [datePreset, setDatePreset] = useState("month");
   const [start, setStart] = useState(toISO(firstOfMonth));
   const [end, setEnd] = useState(toISO(today));
@@ -159,9 +167,16 @@ export default function BillsPage() {
     if (start > end) { setError("'From' date must be before 'To' date."); return; }
     setLoading(true); setError(null);
     try {
-      const res = await getAllBills({ start, end, source: "all" });
-      setBills(res?.bills || []);
-      setFailedSources(res?.failed_sources || []);
+      const [billsRes, financeRes] = await Promise.all([
+        getAllBills({ start, end, source: "all" }),
+        // Other Income has no per-row source in AllBillsView, so it's fetched
+        // from the Finance Dashboard instead, over the same custom range.
+        getFinanceDashboard({ period: "custom", start, end }).catch(() => null),
+      ]);
+      setBills(billsRes?.bills || []);
+      setFailedSources(billsRes?.failed_sources || []);
+      const oi = financeRes?.revenue?.other_income;
+      setOtherIncome(oi ? { amount: Number(oi.amount || 0), count: oi.count || 0, lab_commission: Number(oi.lab_commission || 0) } : { amount: 0, count: 0, lab_commission: 0 });
     } catch { setError("Failed to load bills."); }
     finally { setLoading(false); }
   }, [start, end]);
@@ -210,9 +225,11 @@ export default function BillsPage() {
   // Computed from searchStatusFiltered (all sources) so these cards stay accurate
   // no matter which source tab is selected.
   const paidBills = searchStatusFiltered.filter(b => b.payment_status === "PAID");
-  const totalRevenue = paidBills
+  const billsRevenue = paidBills
     .filter(b => b.source === "Reception" || b.source === "Pharmacy")
     .reduce((s, b) => s + Number(b.amount || 0), 0);
+  // Matches FinanceDashboardView's total_revenue = Reception + Pharmacy + Other Income.
+  const totalRevenue = billsRevenue + otherIncome.amount;
   const labRevenue = paidBills
     .filter(b => b.source === "Laboratory")
     .reduce((s, b) => s + Number(b.amount || 0), 0);
@@ -246,14 +263,22 @@ export default function BillsPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px", marginBottom: "22px" }}>
         <div>
           <h1 style={{ fontSize: "20px", fontWeight: 800, color: "#0F172A", margin: 0 }}>All Bills</h1>
-          <p style={{ fontSize: "13px", color: "#64748B", margin: "4px 0 0" }}>Consolidated view of all hospital bills — Consultation, Pharmacy & Lab</p>
+          <p style={{ fontSize: "13px", color: "#64748B", margin: "4px 0 0" }}>Consolidated view of all hospital bills — Consultation, Pharmacy & Lab, plus Other Income</p>
         </div>
-        <button
-          onClick={() => navigate("/manager/expenses")}
-          style={{ padding: "9px 16px", borderRadius: "8px", border: "1px solid #E2E8F0", background: "#fff", color: ACCENT, fontWeight: 700, fontSize: "12.5px", cursor: "pointer", whiteSpace: "nowrap" }}
-        >
-          View Expenses & Purchases →
-        </button>
+        <div style={{ display: "flex", gap: "10px", flexWrap: "wrap" }}>
+          <button
+            onClick={() => navigate("/manager/income")}
+            style={{ padding: "9px 16px", borderRadius: "8px", border: "1px solid #E2E8F0", background: "#fff", color: "#16A34A", fontWeight: 700, fontSize: "12.5px", cursor: "pointer", whiteSpace: "nowrap" }}
+          >
+            View Other Income →
+          </button>
+          <button
+            onClick={() => navigate("/manager/expenses")}
+            style={{ padding: "9px 16px", borderRadius: "8px", border: "1px solid #E2E8F0", background: "#fff", color: ACCENT, fontWeight: 700, fontSize: "12.5px", cursor: "pointer", whiteSpace: "nowrap" }}
+          >
+            View Expenses & Purchases →
+          </button>
+        </div>
       </div>
 
       {/* Date filters */}
@@ -340,6 +365,21 @@ export default function BillsPage() {
               style={{ padding: "8px 12px", borderRadius: "8px", border: "1px solid #E2E8F0", fontSize: "13px", color: "#374151", background: "#F8FAFC", outline: "none", width: "160px" }} />
           </div>
           <button onClick={load} style={{ padding: "8px 16px", borderRadius: "8px", border: "1px solid #E2E8F0", background: "#fff", color: "#64748B", fontWeight: 600, fontSize: "12px", cursor: "pointer" }}>↻ Refresh</button>
+          <ExportButtons
+            rows={filtered}
+            columns={[
+              { header: "Date", accessor: "date" },
+              { header: "Bill No.", accessor: "bill_number" },
+              { header: "Source", accessor: "source" },
+              { header: "Patient", accessor: "patient" },
+              { header: "Amount", accessor: b => Number(b.amount || 0) },
+              { header: "Status", accessor: "payment_status" },
+              { header: "Payment Mode", accessor: "payment_method" },
+            ]}
+            filename={`bills_overview_${start}_to_${end}`}
+            title="Bills Overview"
+            dateRange={{ from: start, to: end }}
+          />
         </div>
       </div>
 
@@ -352,11 +392,28 @@ export default function BillsPage() {
           {source === 'all' && <p style={{ fontSize: "10px", color: "#94A3B8", margin: "2px 0 0" }}>🏥 Reception + 💊 Pharmacy</p>}
         </div>
 
-        {/* Revenue = Reception + Pharmacy */}
+        {/* Revenue = Reception + Pharmacy + Other Income */}
         <div style={{ background: "#fff", borderRadius: "12px", padding: "16px 18px", border: "2px solid #D1FAE5" }}>
           <p style={{ fontSize: "11px", color: "#94A3B8", fontWeight: 600, margin: "0 0 2px", textTransform: "uppercase" }}>Revenue Collected</p>
-          <p style={{ fontSize: "9.5px", color: "#10B981", fontWeight: 600, margin: "0 0 4px" }}>🏥 Reception + 💊 Pharmacy</p>
+          <p style={{ fontSize: "9.5px", color: "#10B981", fontWeight: 600, margin: "0 0 4px" }}>🏥 Reception + 💊 Pharmacy + 📥 Other Income</p>
           <p style={{ fontSize: "18px", fontWeight: 800, color: "#10B981", margin: 0 }}>{fmt(totalRevenue)}</p>
+          {otherIncome.amount > 0 && (
+            <p style={{ fontSize: "10px", color: "#16A34A", margin: "3px 0 0" }}>includes {fmt(otherIncome.amount)} other income</p>
+          )}
+        </div>
+
+        {/* Other Income — separate model from bills, folded into Revenue Collected above */}
+        <div style={{ background: "#fff", borderRadius: "12px", padding: "16px 18px", border: "1px solid #E8EDF4" }}>
+          <p style={{ fontSize: "11px", color: "#94A3B8", fontWeight: 600, margin: "0 0 4px", textTransform: "uppercase" }}>📥 Other Income</p>
+          <p style={{ fontSize: "16px", fontWeight: 800, color: "#16A34A", margin: 0 }}>{fmt(otherIncome.amount)}</p>
+          <p style={{ fontSize: "11px", color: "#94A3B8", margin: "2px 0 0" }}>{otherIncome.count} records</p>
+          {otherIncome.lab_commission > 0 && (
+            <div style={{ marginTop: "8px", paddingTop: "8px", borderTop: "1px dashed #E8EDF4" }}>
+              <p style={{ fontSize: "10px", color: "#EA580C", fontWeight: 700, margin: 0 }}>
+                🔬 Lab Commission: {fmt(otherIncome.lab_commission)}
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Lab Revenue — reference only, the hospital doesn't collect lab payments itself */}
@@ -449,6 +506,11 @@ export default function BillsPage() {
                         {b.patient_type === "walk-in" && (
                           <span style={{ display: "block", fontSize: "10px", fontWeight: 600, color: "#94A3B8", textTransform: "none" }}>Walk-in</span>
                         )}
+                        {b.consultation_type === "HOME_VISIT" && (
+                          <span style={{ display: "inline-block", marginTop: "3px", padding: "1px 7px", borderRadius: "6px", fontSize: "10px", fontWeight: 700, background: "#FDF4FF", color: "#A21CAF" }}>
+                            🏠 Home Visit
+                          </span>
+                        )}
                       </td>
                       <td style={{ padding: "10px 14px", color: "#64748B", textTransform: "capitalize" }}>{b.payment_method ? b.payment_method.replace("_", " ") : "—"}</td>
                       <td style={{ padding: "10px 14px", fontWeight: 800, color: "#0F172A", fontSize: "13px" }}>{fmt(b.amount)}</td>
@@ -508,10 +570,25 @@ export default function BillsPage() {
               <div>
                 <p style={{ fontSize: "11px", fontWeight: 700, color: SOURCE_STYLE[selectedBill.source]?.text || "#64748B", margin: "0 0 2px", textTransform: "uppercase" }}>
                   {SOURCE_STYLE[selectedBill.source]?.icon} {selectedBill.source}
+                  {selectedBill.consultation_type === "HOME_VISIT" && (
+                    <span style={{ marginLeft: "8px", padding: "1px 8px", borderRadius: "6px", fontSize: "10px", fontWeight: 700, background: "#FDF4FF", color: "#A21CAF", textTransform: "none" }}>
+                      🏠 Home Visit
+                    </span>
+                  )}
                 </p>
                 <h2 style={{ fontSize: "16px", fontWeight: 800, color: "#0F172A", margin: 0, fontFamily: "monospace" }}>{selectedBill.bill_number}</h2>
               </div>
-              <button onClick={closeBill} style={{ border: "none", background: "transparent", color: "#94A3B8", fontSize: "20px", cursor: "pointer", lineHeight: 1, padding: "4px" }}>×</button>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                {detail && !detailLoading && (
+                  <button
+                    onClick={() => navigate(`/manager/bills/print/${SOURCE_LABEL_TO_TAB[selectedBill.source]}/${selectedBill.id}`, { state: { listRow: selectedBill } })}
+                    style={{ padding: "6px 12px", borderRadius: "7px", border: "1px solid #E2E8F0", background: "#fff", color: ACCENT, fontWeight: 700, fontSize: "11.5px", cursor: "pointer", whiteSpace: "nowrap" }}
+                  >
+                    🖨 Print
+                  </button>
+                )}
+                <button onClick={closeBill} style={{ border: "none", background: "transparent", color: "#94A3B8", fontSize: "20px", cursor: "pointer", lineHeight: 1, padding: "4px" }}>×</button>
+              </div>
             </div>
 
             <div style={{ padding: "20px 22px" }}>
@@ -557,6 +634,20 @@ export default function BillsPage() {
                       </div>
                     )}
                   </div>
+
+                  {selectedBill.consultation_type === "HOME_VISIT" && (
+                    <div style={{ border: "1px solid #F5D0FE", background: "#FDF4FF", borderRadius: "10px", padding: "12px 14px", marginBottom: "16px" }}>
+                      <p style={{ fontSize: "10.5px", color: "#A21CAF", fontWeight: 700, textTransform: "uppercase", margin: "0 0 8px" }}>🏠 Home Visit Breakdown</p>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12.5px", marginBottom: "4px" }}>
+                        <span style={{ color: "#701A75" }}>Home Visit Fee</span>
+                        <span style={{ color: "#701A75", fontWeight: 700 }}>{fmt(selectedBill.home_visit_fee)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12.5px" }}>
+                        <span style={{ color: "#701A75" }}>Travel Charge</span>
+                        <span style={{ color: "#701A75", fontWeight: 700 }}>{fmt(selectedBill.travel_charge)}</span>
+                      </div>
+                    </div>
+                  )}
 
                   {detail.converted_bill_id && (
                     <div style={{ background: "#FDF4FF", border: "1px solid #F5D0FE", borderRadius: "10px", padding: "10px 14px", marginBottom: "16px", fontSize: "12.5px", color: "#A21CAF" }}>

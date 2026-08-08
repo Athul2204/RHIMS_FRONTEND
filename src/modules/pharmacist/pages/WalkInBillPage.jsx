@@ -17,6 +17,7 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { createBill, addMedicine, addProcedure, addGeneralItem, completeBill, transitionBillToOpen, markBillPaid, setBillDiscount } from "../api/pharmacistApi";
 import API from "../../../api";
 import { isValidPhone, sanitizePhoneInput, PHONE_ERROR_MESSAGE } from "../../../utils/phoneValidation";
+import { flattenFormError } from "../../../utils/formErrors";
 
 const G = "#8B5CF6";
 const COLORS = {
@@ -696,7 +697,7 @@ export default function WalkInBillPage({ onClose }) {
       setStep("payment");
     } catch(e) {
       console.error("Complete bill error:", e);
-      showToast("Failed to complete bill: " + String(e), false);
+      showToast("Failed to complete bill: " + flattenFormError(e), false);
     } finally {
       setBusy(false);
     }
@@ -720,7 +721,7 @@ export default function WalkInBillPage({ onClose }) {
       setTimeout(() => setStep("success"), 500);
     } catch(e) {
       console.error("Mark paid error:", e);
-      showToast("Failed to record payment: " + String(e), false);
+      showToast("Failed to record payment: " + flattenFormError(e), false);
     } finally {
       setBusy(false);
     }

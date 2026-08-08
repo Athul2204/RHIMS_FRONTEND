@@ -42,6 +42,22 @@ const err = (e, msg) => {
     throw new Error(errorData.message);
   }
 
+  // ✅ FIX: resolve_branch_for_write (and other branch-scoped write
+  // endpoints) return { "errors": { "branch": "..." } } on failure —
+  // this didn't match any case above, so it fell through to the generic
+  // flattener below, which did String(val) on the nested object and
+  // produced the literal text "errors: [object Object]" in the UI,
+  // hiding the actual message (e.g. "Your account is not assigned to a
+  // branch. Contact a group admin.").
+  if (errorData?.errors && typeof errorData.errors === "object") {
+    const nested = Object.entries(errorData.errors)
+      .map(([field, val]) => Array.isArray(val) ? val.join(" ") : String(val))
+      .join(" | ");
+    if (nested) {
+      throw new Error(nested);
+    }
+  }
+
   // ✅ FIX: DRF serializer validation errors (e.g. from CreateBillSerializer's
   // object-level `validate()`) come back as { non_field_errors: [...] } or as
   // per-field arrays like { walkin_name: ["..."], prescription_id: ["..."] }
@@ -55,7 +71,20 @@ const err = (e, msg) => {
     }
     const fieldErrors = Object.entries(errorData)
       .map(([field, val]) => {
-        const text = Array.isArray(val) ? val.join(" ") : String(val);
+        // val can itself be a nested object (not just a string or array
+        // of strings) — String() on a plain object silently produces
+        // "[object Object]", which is worse than useless in the UI, so
+        // flatten one level deeper instead of stringifying it blindly.
+        let text;
+        if (Array.isArray(val)) {
+          text = val.join(" ");
+        } else if (val && typeof val === "object") {
+          text = Object.values(val)
+            .map(v => Array.isArray(v) ? v.join(" ") : String(v))
+            .join(" ");
+        } else {
+          text = String(val);
+        }
         return `${field}: ${text}`;
       })
       .join(" | ");
@@ -478,6 +507,25 @@ export const markBillPaid = (billId, paymentData = {}) => {
 };
 
 /**
+ * Send a PAID (paid + dispensed) bill to the reception module, where
+ * it'll show up in reception's own Pharmacy Bills list for
+ * review/printing. Idempotent — safe to call again on an
+ * already-sent bill.
+ *
+ * @param {number} billId - Bill ID
+ * @returns {Promise<Object>} { message, bill }
+ */
+export const sendBillToReception = (billId) => {
+  if (!billId) {
+    return Promise.reject(new Error("Bill ID is required"));
+  }
+
+  return API.post(`/pharmacist/bills/${billId}/send-to-reception/`)
+    .then((response) => response.data)
+    .catch((e) => err(e, "Failed to send bill to reception"));
+};
+
+/**
  * Set (or clear, with amount 0) the flat discount on a bill.
  * POST /api/pharmacist/bills/{billId}/discount/
  * Flat amount only (not a percentage) — re-validated server-side against
@@ -764,10 +812,7 @@ export const getDealers = (filters = {}) => {
   const qs = params.toString();
   return API.get(qs ? `/manager/dealers/?${qs}` : "/manager/dealers/")
     .then((res) => (Array.isArray(res.data) ? res.data : []))
-    .catch((e) => {
-      console.error("[API] Failed to fetch dealers:", e);
-      return [];
-    });
+    .catch((e) => err(e, "Failed to fetch dealers"));
 };
 
 // ═════════════════════════════════════════════════════════════════════

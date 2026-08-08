@@ -275,13 +275,35 @@ function Field({ label, children, help, error }) {
 }
 
 // ═════════════════════════════════════════════════════════════
+// SUPPLY BATCH STATUS BADGE
+// ═════════════════════════════════════════════════════════════
+function SupplyBatchStatusBadge({ status }) {
+  const MAP = {
+    ACTIVE:           { bg: "#F0FDF4", color: "#15803D", label: "Active" },
+    DEPLETED:         { bg: "#F3E8FF", color: "#7C3AED", label: "Depleted" },
+    PENDING_APPROVAL: { bg: "#FFFBEB", color: "#B45309", label: "⏳ Pending Approval" },
+    REJECTED:         { bg: "#FEF2F2", color: "#B91C1C", label: "✕ Rejected" },
+  };
+  const s = MAP[status] || { bg: "#F1F5F9", color: "#64748B", label: status };
+  return (
+    <span style={{
+      padding: "2px 7px", borderRadius: 12, fontSize: 10, fontWeight: 700,
+      background: s.bg, color: s.color, whiteSpace: "nowrap",
+    }}>{s.label}</span>
+  );
+}
+
+// ═════════════════════════════════════════════════════════════
 // BATCH ROW (inline adjust + return-to-provider trigger)
 // ═════════════════════════════════════════════════════════════
 function BatchRow({ batch, onReturn }) {
+  const isPending  = batch.status === "PENDING_APPROVAL";
+  const isRejected = batch.status === "REJECTED";
   return (
     <tr style={{
       borderBottom: `1px solid ${C.gray[100]}`, fontSize: 12.5,
-      opacity: batch.quantity === 0 ? 0.55 : 1,
+      opacity: (batch.quantity === 0 || isRejected) ? 0.6 : 1,
+      background: isPending ? "#FFFDF0" : isRejected ? "#FFF8F8" : "transparent",
     }}>
       <td style={{ padding: "7px 10px", fontWeight: 700, color: C.gray[800] }}>
         {batch.batch_number || <span style={{ color: C.gray[400], fontWeight: 500, fontStyle: "italic" }}>legacy #{batch.batch_id}</span>}
@@ -291,7 +313,10 @@ function BatchRow({ batch, onReturn }) {
       <td style={{ padding: "7px 10px" }}>{batch.invoice_number || "—"}</td>
       <td style={{ padding: "7px 10px", color: C.gray[500] }}>{batch.received_by_name || "—"}</td>
       <td style={{ padding: "7px 10px", textAlign: "right" }}>{batch.original_quantity}</td>
-      <td style={{ padding: "7px 10px", textAlign: "right", fontWeight: 700 }}>{batch.quantity}</td>
+      <td style={{ padding: "7px 10px", textAlign: "right", fontWeight: 700,
+        color: isPending ? "#B45309" : batch.quantity === 0 ? C.gray[400] : C.gray[900] }}>
+        {isPending ? "—" : batch.quantity}
+      </td>
       <td style={{ padding: "7px 10px", textAlign: "right" }}>₹{Number(batch.unit_cost).toFixed(2)}</td>
       <td style={{ padding: "7px 10px", textAlign: "right", color: C.gray[600] }}>₹{Number(batch.total_cost ?? (batch.original_quantity * batch.unit_cost)).toFixed(2)}</td>
       <td style={{ padding: "7px 10px", ...expiryStyle(batch.expiry_date, batch.quantity) }}>
@@ -300,16 +325,20 @@ function BatchRow({ batch, onReturn }) {
           <span style={{ marginLeft: 5, fontSize: 10, color: C.warning, fontWeight: 700 }}>⚠ SOON</span>
         )}
       </td>
+      {/* ✅ NEW: approval status badge column */}
+      <td style={{ padding: "7px 10px" }}>
+        <SupplyBatchStatusBadge status={batch.status || "ACTIVE"} />
+      </td>
       <td style={{ padding: "7px 10px" }}>
         <button
           onClick={() => onReturn(batch)}
-          disabled={batch.quantity === 0}
-          title="Return this batch to the supplier"
+          disabled={batch.quantity === 0 || isPending || isRejected}
+          title={isPending ? "Awaiting manager approval" : isRejected ? "Batch was rejected" : "Return this batch to the supplier"}
           style={{
             border: `1px solid ${C.danger}`, background: "#fff", color: C.danger,
             borderRadius: 6, padding: "3px 8px", fontSize: 11, fontWeight: 600,
-            cursor: batch.quantity === 0 ? "default" : "pointer",
-            opacity: batch.quantity === 0 ? 0.4 : 1,
+            cursor: (batch.quantity === 0 || isPending || isRejected) ? "default" : "pointer",
+            opacity: (batch.quantity === 0 || isPending || isRejected) ? 0.4 : 1,
             display: "flex", alignItems: "center", gap: 4,
           }}>
           <Icon d={ICONS.undo} size={11} color={C.danger} /> Return
@@ -1081,7 +1110,7 @@ function StockTab({ items, loading, showToast, onRefreshSummary }) {
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
                   <thead>
                     <tr style={{ textAlign: "left", fontSize: 11, color: C.gray[500], textTransform: "uppercase" }}>
-                      {["Batch #","Purchased","Supplier","Invoice","Received By","Original","Remaining","Unit Cost","Value","Expiry",""].map((h) => (
+                      {["Batch #","Purchased","Supplier","Invoice","Received By","Original","Remaining","Unit Cost","Value","Expiry","Status",""].map((h) => (
                         <th key={h} style={{ padding: "4px 10px", fontWeight: 700 }}>{h}</th>
                       ))}
                     </tr>

@@ -5,6 +5,7 @@ import {
   getGuestDoctorList, createGuestDoctor, patchGuestDoctor,
   deactivateGuestDoctor, reactivateGuestDoctor,
 } from "../api/adminApi";
+import useBranchScope from "../hooks/useBranchScope";
 
 const G = "#06B6D4";
 
@@ -72,9 +73,10 @@ const Modal = ({ title, subtitle, onClose, children }) => (
   </div>
 );
 
-const EMPTY_FORM = { username: "", password: "", email: "" };
+const EMPTY_FORM = { username: "", password: "", email: "", branch: "" };
 
 export default function GuestDoctorsPage() {
+  const { isGroupAdmin, branches, selectedBranch, listParams } = useBranchScope();
   const [guests, setGuests]         = useState([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState("");
@@ -98,8 +100,9 @@ export default function GuestDoctorsPage() {
     let url = "/administration/guest-doctors/?";
     if (showAll) url += "all=true&";
     if (search)  url += `search=${encodeURIComponent(search)}&`;
+    if (listParams.branch) url += `branch=${encodeURIComponent(listParams.branch)}&`;
     return url;
-  }, [showAll, search]);
+  }, [showAll, search, listParams]);
 
   // ── Load ────────────────────────────────────────────────────────────────
   const loadGuests = useCallback((url) => {
@@ -120,7 +123,10 @@ export default function GuestDoctorsPage() {
 
   // ── Modal helpers ────────────────────────────────────────────────────────
   const openAdd = () => {
-    setForm(EMPTY_FORM);
+    // Prefill (not lock — guest doctors are intentionally allowed to be
+    // cross-branch/unassigned, see the field hint below) with whatever
+    // branch is currently narrowed in the header switcher.
+    setForm({ ...EMPTY_FORM, branch: selectedBranch ?? "" });
     setFormError("");
     setShowPass(false);
     setModal("add");
@@ -132,6 +138,7 @@ export default function GuestDoctorsPage() {
       username: g.username ?? "",
       password: "",   // never pre-fill
       email:    g.email ?? "",
+      branch:   g.branch ?? "",
     });
     setFormError("");
     setShowPass(false);
@@ -156,6 +163,11 @@ export default function GuestDoctorsPage() {
           email:    form.email.trim(),
           ...(form.password.trim() ? { password: form.password } : {}),
         },
+        // Guest doctors are a cross-branch resource (branch_required_on_write
+        // is False server-side) — a group admin may optionally tag one to a
+        // branch here, but it's never required, and never sent at all for
+        // a branch-scoped admin (resolved automatically if needed).
+        ...(isGroupAdmin && form.branch ? { branch: Number(form.branch) } : {}),
       };
 
       if (modal === "add") {
@@ -245,7 +257,11 @@ export default function GuestDoctorsPage() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead style={{ background: "#F8FAFC" }}>
               <tr>
-                {["Code", "Name (set by reception)", "Login", "Status", "Actions"].map(h => (
+                {[
+                  "Code", "Name (set by reception)",
+                  ...(isGroupAdmin ? ["Branch"] : []),
+                  "Login", "Status", "Actions",
+                ].map(h => (
                   <th key={h} style={{ padding: "11px 14px", textAlign: "left", fontSize: "11px", fontWeight: 600, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.5px", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
@@ -254,7 +270,7 @@ export default function GuestDoctorsPage() {
               {loading ? (
                 Array.from({ length: 4 }).map((_, i) => (
                   <tr key={i} style={{ borderTop: "1px solid #F8FAFC" }}>
-                    {Array.from({ length: 5 }).map((_, j) => (
+                    {Array.from({ length: isGroupAdmin ? 6 : 5 }).map((_, j) => (
                       <td key={j} style={{ padding: "14px" }}>
                         <div style={{ height: "14px", borderRadius: "4px", background: "#F1F5F9", animation: "pulse 1.5s infinite" }} />
                       </td>
@@ -263,7 +279,7 @@ export default function GuestDoctorsPage() {
                 ))
               ) : guests.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ padding: "48px", textAlign: "center", color: "#94A3B8", fontSize: "14px" }}>
+                  <td colSpan={isGroupAdmin ? 6 : 5} style={{ padding: "48px", textAlign: "center", color: "#94A3B8", fontSize: "14px" }}>
                     <Ico path={ICONS.user} size={36} color="#CBD5E1" /><br />
                     <span style={{ marginTop: "8px", display: "block" }}>No guest doctors found.</span>
                   </td>
@@ -288,6 +304,14 @@ export default function GuestDoctorsPage() {
                         <span style={{ fontSize: "13px", fontWeight: 600, color: "#1E293B" }}>{g.full_name || "—"}</span>
                       </div>
                     </td>
+                    {isGroupAdmin && (
+                      <td style={{ padding: "12px 14px", fontSize: "12px", color: "#475569", whiteSpace: "nowrap" }}>
+                        {(() => {
+                          const b = branches.find(b => b.branch_id === g.branch);
+                          return b ? `${b.name} (${b.code})` : <span style={{ color: "#CBD5E1" }}>Unassigned</span>;
+                        })()}
+                      </td>
+                    )}
                     <td style={{ padding: "12px 14px" }}>
                       {g.username ? (
                         <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", fontSize: "12px", background: "#DBEAFE", color: "#1D4ED8", padding: "3px 9px", borderRadius: "20px", fontWeight: 600 }}>
@@ -365,6 +389,15 @@ export default function GuestDoctorsPage() {
                 onChange={e => set("email", e.target.value)}
                 placeholder="doctor@hospital.com" />
             </Field>
+
+            {isGroupAdmin && (
+              <Field label="Branch" hint="Optional — guest doctors can be cross-branch.">
+                <select style={{ ...inp, cursor: "pointer" }} value={form.branch} onChange={e => set("branch", e.target.value)}>
+                  <option value="">— Unassigned —</option>
+                  {branches.map(b => <option key={b.branch_id} value={b.branch_id}>{b.name} ({b.code})</option>)}
+                </select>
+              </Field>
+            )}
 
             <Field
               label={modal === "add" ? "Password" : "Password"}

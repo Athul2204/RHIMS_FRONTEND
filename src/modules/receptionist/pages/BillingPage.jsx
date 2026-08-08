@@ -17,8 +17,9 @@
 // ─────────────────────────────────────────────────────────────────
 import { useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { getBills, payBill, createBill, getPatients, getDoctors, checkFollowUp, toArray, reassignBillDoctor, cancelBill, getPrebookings, cancelPrebooking } from "../api/receptionApi";
+import { getBills, payBill, createBill, getPatients, getDoctors, checkFollowUp, toArray, reassignBillDoctor, cancelBill, getPrebookings, cancelPrebooking, getHomeVisitDefaults } from "../api/receptionApi";
 import ConvertDialog from "../components/ConvertDialog";
+import ConfirmDialog from "../../../components/shared/ConfirmDialog";
 
 const G       = "#16A34A";
 const LIGHT_G = "#DCFCE7";
@@ -65,11 +66,11 @@ const PayBadge = ({ status, type, cancelled }) => {
       </span>
       <span style={{
         fontSize: "10.5px", fontWeight: 600, padding: "1px 7px", borderRadius: "6px",
-        background: type === "NEW" ? "#EFF6FF" : "#F5F3FF",
-        color: type === "NEW" ? "#2563EB" : "#7C3AED",
+        background: type === "HOME_VISIT" ? "#FDF4FF" : type === "NEW" ? "#EFF6FF" : "#F5F3FF",
+        color: type === "HOME_VISIT" ? "#A21CAF" : type === "NEW" ? "#2563EB" : "#7C3AED",
         display: "inline-block", width: "fit-content",
       }}>
-        {type === "REVISIT" ? "Revisit" : "New"}
+        {type === "HOME_VISIT" ? "🏠 Home Visit" : type === "REVISIT" ? "Revisit" : "New"}
       </span>
     </div>
   );
@@ -184,7 +185,7 @@ function ReassignDoctorDialog({ bill, doctors, onConfirm, onCancel, saving }) {
           <option value="">Select a doctor…</option>
           {options.map(d => (
             <option key={`${d.doctor_type}-${d.id}`} value={`${d.doctor_type}-${d.id}`}>
-              {d.full_name}{d.specialization ? ` — ${d.specialization}` : ""}{d.doctor_type === "guest" ? " (Guest)" : ""}
+              {d.full_name}{d.specialty_name ? ` — ${d.specialty_name}` : ""}{d.doctor_type === "guest" ? " (Guest)" : ""}
             </option>
           ))}
         </select>
@@ -327,20 +328,24 @@ function EditBillDialog({ bill, onSave, onCancel, saving }) {
     doctor_name:        bill?.doctor_name        ?? "",
     consultation_fee:   bill?.consultation_fee   ?? "",
     consultation_type:  bill?.consultation_type  ?? "NEW",
+    travel_charge:      bill?.travel_charge      ?? "0",
     payment_method:     bill?.payment_method     ?? "CASH",
     upi_reference:      bill?.upi_reference      ?? "",
     discount_amount:    bill?.discount_amount    ?? "0",
     notes:              bill?.notes              ?? "",
   });
   const [err, setErr] = useState("");
+  const [loadingHomeVisitDefaults, setLoadingHomeVisitDefaults] = useState(false);
 
   if (!bill) return null;
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const isHomeVisit = form.consultation_type === "HOME_VISIT";
 
-  // Live subtotal/total preview — subtotal = consultation_fee + registration_fee (unchanged by this dialog)
+  // Live subtotal/total preview — subtotal = consultation_fee + registration_fee + travel_charge (Home Visit only)
   const regFeeForCalc = parseFloat(bill.registration_fee ?? 0);
-  const subtotalForCalc = parseFloat(form.consultation_fee || 0) + regFeeForCalc;
+  const travelForCalc = isHomeVisit ? (parseFloat(form.travel_charge || 0) || 0) : 0;
+  const subtotalForCalc = parseFloat(form.consultation_fee || 0) + regFeeForCalc + travelForCalc;
   const discountForCalc = parseFloat(form.discount_amount || 0);
   const totalForCalc = Math.max(subtotalForCalc - (isNaN(discountForCalc) ? 0 : discountForCalc), 0);
 
@@ -348,6 +353,8 @@ function EditBillDialog({ bill, onSave, onCancel, saving }) {
     setErr("");
     if (!isPaid && !form.doctor_name.trim()) { setErr("Doctor name is required."); return; }
     if (!isPaid && (form.consultation_fee === "" || isNaN(parseFloat(form.consultation_fee)))) { setErr("Consultation fee is required."); return; }
+    if (!isPaid && isHomeVisit && parseFloat(form.consultation_fee) <= 0) { setErr("Home Visit Fee must be greater than 0."); return; }
+    if (!isPaid && isHomeVisit && form.travel_charge !== "" && (isNaN(parseFloat(form.travel_charge)) || parseFloat(form.travel_charge) < 0)) { setErr("Travel charge cannot be negative."); return; }
     if (!isPaid && form.payment_method === "UPI" && !form.upi_reference.trim()) { setErr("UPI reference is required."); return; }
     if (!isPaid && (isNaN(discountForCalc) || discountForCalc < 0)) { setErr("Discount amount cannot be negative."); return; }
     if (!isPaid && discountForCalc > subtotalForCalc) { setErr("Discount amount cannot exceed the bill subtotal."); return; }
@@ -358,6 +365,7 @@ function EditBillDialog({ bill, onSave, onCancel, saving }) {
           doctor_name:       form.doctor_name.trim(),
           consultation_fee:  parseFloat(form.consultation_fee),
           consultation_type: form.consultation_type,
+          travel_charge:     isHomeVisit ? (parseFloat(form.travel_charge) || 0) : 0,
           payment_method:    form.payment_method,
           discount_amount:   isNaN(discountForCalc) ? 0 : discountForCalc,
           notes:             form.notes,
@@ -425,7 +433,7 @@ function EditBillDialog({ bill, onSave, onCancel, saving }) {
           {/* Fee + Type */}
           {!isPaid && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
-              <Field label="Consultation Fee (₹)">
+              <Field label={isHomeVisit ? "Home Visit Fee (₹)" : "Consultation Fee (₹)"}>
                 <input
                   type="number" min="0"
                   style={{ ...inp, fontSize: "17px", fontWeight: 700, color: G }}
@@ -444,16 +452,48 @@ function EditBillDialog({ bill, onSave, onCancel, saving }) {
                 <select
                   style={{ ...inp, cursor: "pointer" }}
                   value={form.consultation_type}
-                  onChange={e => {
+                  onChange={async e => {
                     const t = e.target.value;
                     set("consultation_type", t);
-                    if (t === "REVISIT") set("consultation_fee", "0");
+                    if (t === "REVISIT") {
+                      set("consultation_fee", "0");
+                    } else if (t === "HOME_VISIT") {
+                      setLoadingHomeVisitDefaults(true);
+                      try {
+                        const defaults = await getHomeVisitDefaults();
+                        setForm(f => ({
+                          ...f,
+                          consultation_type: t,
+                          consultation_fee: String(defaults.default_home_visit_fee ?? ""),
+                          travel_charge:    String(defaults.default_home_visit_travel_charge ?? "0"),
+                        }));
+                      } catch { /* leave existing values — reception can still enter manually */ }
+                      finally { setLoadingHomeVisitDefaults(false); }
+                    }
                   }}>
                   <option value="NEW">New</option>
                   <option value="REVISIT">Revisit (₹0)</option>
+                  <option value="HOME_VISIT">Home Visit</option>
                 </select>
               </Field>
             </div>
+          )}
+
+          {/* Travel Charge — Home Visit only */}
+          {!isPaid && isHomeVisit && (
+            <Field label="Travel Charge (₹)">
+              <input
+                type="number" min="0"
+                style={inp}
+                value={form.travel_charge}
+                disabled={loadingHomeVisitDefaults}
+                onChange={e => set("travel_charge", e.target.value)}
+                onFocus={e => e.target.style.borderColor = G}
+                onBlur={e => e.target.style.borderColor = "#E8EDF4"}
+                placeholder="0"
+              />
+              <p style={{ fontSize: "10.5px", color: "#94A3B8", margin: "2px 0 0" }}>Optional — defaults to ₹0 if left blank</p>
+            </Field>
           )}
 
           {/* Discount + live summary */}
@@ -470,6 +510,9 @@ function EditBillDialog({ bill, onSave, onCancel, saving }) {
               />
               <div style={{ display: "flex", flexDirection: "column", gap: "3px", marginTop: "4px", padding: "10px 12px", borderRadius: "9px", background: "#F8FAFC", fontSize: "12px", color: "#475569" }}>
                 <div style={{ display: "flex", justifyContent: "space-between" }}><span>Subtotal</span><span>₹{subtotalForCalc.toLocaleString("en-IN")}</span></div>
+                {isHomeVisit && travelForCalc > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between" }}><span>(incl. Travel Charge)</span><span>₹{travelForCalc.toLocaleString("en-IN")}</span></div>
+                )}
                 <div style={{ display: "flex", justifyContent: "space-between" }}><span>Discount</span><span>− ₹{(isNaN(discountForCalc) ? 0 : discountForCalc).toLocaleString("en-IN")}</span></div>
                 <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, color: "#0F172A", paddingTop: "4px", borderTop: "1px dashed #E2E8F0" }}><span>Total Payable</span><span>₹{totalForCalc.toLocaleString("en-IN")}</span></div>
               </div>
@@ -550,7 +593,7 @@ const DoctorCard = ({ d, selected, onClick }) => (
     </div>
     <div style={{ flex: 1, minWidth: 0 }}>
       <div style={{ fontSize: "13.5px", fontWeight: 600, color: "#1E293B", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.full_name}</div>
-      <div style={{ fontSize: "11.5px", color: "#64748B" }}>{d.specialization ?? "General"}</div>
+      <div style={{ fontSize: "11.5px", color: "#64748B" }}>{d.specialty_name ?? "General"}</div>
     </div>
     <div style={{ textAlign: "right", flexShrink: 0 }}>
       <div style={{ fontSize: "13px", fontWeight: 700, color: G }}>₹{Math.floor(d.consultation_fee ?? 0)}</div>
@@ -576,6 +619,7 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
     patient:             preselectedPatient ?? null,
     doctor:              null,
     fee:                 "",
+    travel_charge:       "0",
     method:              "CASH",
     upi_reference:       "",
     discount_amount:     "",
@@ -589,6 +633,20 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
   const [docSearch, setDocSearch] = useState("");
   const [saving, setSaving]       = useState(false);
   const [toast,  setToast]        = useState(null);
+  const [loadingHomeVisitDefaults, setLoadingHomeVisitDefaults] = useState(false);
+
+  // One-time MRD registration fee amount (HospitalSettings.mrd_registration_fee),
+  // fetched once so the Bill Summary can show the actual ₹ figure — and fold it
+  // into Total Payable — instead of a vague "added on generate" placeholder.
+  // Same branch-scoped endpoint already used to prefill Home Visit defaults;
+  // null while loading / if the fetch fails, in which case the summary falls
+  // back to the advisory note only.
+  const [mrdFee, setMrdFee] = useState(null);
+  useEffect(() => {
+    getHomeVisitDefaults()
+      .then(defaults => setMrdFee(parseFloat(defaults.mrd_registration_fee ?? 0)))
+      .catch(() => {});
+  }, []);
 
   // ── Auto-run follow-up check when patient is preselected ──────
   useEffect(() => {
@@ -598,11 +656,15 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
         // ✅ BUG 3 NOTE: Backend now returns is_revisit_eligible and message
         // (previously returned eligible and reason — keys didn't match and
         // the revisit flow was always silently broken).
+        // NOTE: only surface eligibility/message here — don't auto-flip
+        // `type` to REVISIT. The consultation type stays whatever it was
+        // (defaults to NEW), and Free Revisit only becomes the selected
+        // type if reception explicitly picks it from the Type dropdown,
+        // same as the Convert-to-Bill dialog.
         setForm(f => ({
           ...f,
           is_revisit_eligible: res.is_revisit_eligible,
           revisit_message:     res.message,
-          type:                res.is_revisit_eligible ? "REVISIT" : "NEW",
         }));
       })
       .catch(() => {});
@@ -626,13 +688,13 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
   const filtDoc = doctors.filter(d => {
     if (d.doctor_type === "guest") return false; // guests go in the other tab
     const q = docSearch.toLowerCase();
-    return !q || (d.full_name ?? "").toLowerCase().includes(q) || (d.specialization ?? "").toLowerCase().includes(q);
+    return !q || (d.full_name ?? "").toLowerCase().includes(q) || (d.specialty_name ?? "").toLowerCase().includes(q);
   });
 
   const filtGuestDoc = doctors.filter(d => {
     if (d.doctor_type !== "guest") return false;
     const q = docSearch.toLowerCase();
-    return !q || (d.full_name ?? "").toLowerCase().includes(q) || (d.specialization ?? "").toLowerCase().includes(q);
+    return !q || (d.full_name ?? "").toLowerCase().includes(q) || (d.specialty_name ?? "").toLowerCase().includes(q);
   });
 
   // ── Patient select ────────────────────────────────────────────
@@ -644,11 +706,13 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
     try {
       const res = await checkFollowUp(p.patient_id);
       // ✅ BUG 3 NOTE: reading is_revisit_eligible and message (fixed backend keys)
+      // NOTE: only surface eligibility/message — don't auto-flip `type` to
+      // REVISIT. Stays NEW by default; Free Revisit is only used if
+      // reception explicitly selects it from the Type dropdown.
       setForm(f => ({
         ...f,
         is_revisit_eligible: res.is_revisit_eligible,
         revisit_message:     res.message,
-        type:                res.is_revisit_eligible ? "REVISIT" : "NEW",
       }));
     } catch { /* silently ignore */ }
   };
@@ -720,6 +784,16 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
       return;
     }
 
+    if (form.type === "HOME_VISIT" && (isNaN(parseFloat(form.fee)) || parseFloat(form.fee) <= 0)) {
+      setToast({ msg: "Home Visit Fee must be greater than 0.", err: true });
+      return;
+    }
+
+    if (form.type === "HOME_VISIT" && form.travel_charge !== "" && (isNaN(parseFloat(form.travel_charge)) || parseFloat(form.travel_charge) < 0)) {
+      setToast({ msg: "Travel charge cannot be negative.", err: true });
+      return;
+    }
+
     if (form.method === "UPI" && !form.upi_reference.trim()) {
       setToast({ msg: "UPI reference number is required.", err: true });
       return;
@@ -730,7 +804,7 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
       setToast({ msg: "Discount amount cannot be negative.", err: true });
       return;
     }
-    const feeForCheck = parseFloat(form.fee) || 0;
+    const feeForCheck = (parseFloat(form.fee) || 0) + (form.type === "HOME_VISIT" ? (parseFloat(form.travel_charge) || 0) : 0);
     if (!isNaN(discountVal) && discountVal > feeForCheck) {
       setToast({ msg: "Discount amount cannot exceed the bill subtotal.", err: true });
       return;
@@ -764,6 +838,7 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
         consultation_fee: parseFloat(form.fee) || 0,
         payment_method:   form.method,
         consultation_type: form.type,
+        travel_charge:    form.type === "HOME_VISIT" ? (parseFloat(form.travel_charge) || 0) : 0,
         discount_amount:  isNaN(discountVal) ? 0 : discountVal,
         ...(form.method === "UPI" && { upi_reference: form.upi_reference }),
         ...(form.notes.trim()    && { notes: form.notes }),
@@ -971,7 +1046,7 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
                     </span>
                     <input
                       style={{ ...inputStyle, paddingLeft: "38px" }}
-                      placeholder="Search by name or specialization…"
+                      placeholder="Search by name or specialty…"
                       value={docSearch}
                       onChange={e => setDocSearch(e.target.value)}
                       onFocus={e => e.target.style.borderColor = G}
@@ -1140,39 +1215,56 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
                 </div>
               )}
 
-              {/* Consultation type (only if revisit eligible) */}
-              {form.is_revisit_eligible && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "18px" }}>
-                  <label style={labelStyle}>Consultation Type</label>
-                  <select
-                    style={{ padding: "11px 14px", borderRadius: "9px", border: "1.5px solid #E8EDF4", fontSize: "14px", color: "#1E293B", background: "#fff", cursor: "pointer" }}
-                    value={form.type}
-                    onChange={e => {
-                      const t = e.target.value;
-                      setForm(f => ({
-                        ...f, type: t,
-                        fee: t === "REVISIT" ? "0"
-                          : doctorMode === "active" ? String(f.doctor?.consultation_fee ?? "")
-                          : "",        // common doctor → manual entry
-                      }));
-                    }}>
+              {/* Consultation type — always selectable; Revisit only offered when eligible */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "18px" }}>
+                <label style={labelStyle}>Consultation Type</label>
+                <select
+                  style={{ padding: "11px 14px", borderRadius: "9px", border: "1.5px solid #E8EDF4", fontSize: "14px", color: "#1E293B", background: "#fff", cursor: "pointer" }}
+                  value={form.type}
+                  onChange={async e => {
+                    const t = e.target.value;
+                    if (t === "HOME_VISIT") {
+                      setLoadingHomeVisitDefaults(true);
+                      try {
+                        const defaults = await getHomeVisitDefaults();
+                        setForm(f => ({
+                          ...f, type: t,
+                          fee: String(defaults.default_home_visit_fee ?? ""),
+                          travel_charge: String(defaults.default_home_visit_travel_charge ?? "0"),
+                        }));
+                      } catch {
+                        setForm(f => ({ ...f, type: t, fee: "", travel_charge: "0" }));
+                      } finally { setLoadingHomeVisitDefaults(false); }
+                      return;
+                    }
+                    setForm(f => ({
+                      ...f, type: t,
+                      fee: t === "REVISIT" ? "0"
+                        : doctorMode === "active" ? String(f.doctor?.consultation_fee ?? "")
+                        : "",        // common doctor → manual entry
+                      travel_charge: "0",
+                    }));
+                  }}>
+                  {form.is_revisit_eligible && (
                     <option value="REVISIT">Revisit Consultation (₹0 — Free)</option>
-                    <option value="NEW">
-                      New Consultation
-                      {doctorMode === "active" && form.doctor ? ` (₹${parseFloat(form.doctor.consultation_fee ?? 0)})` : ""}
-                    </option>
-                  </select>
-                </div>
-              )}
+                  )}
+                  <option value="NEW">
+                    New Consultation
+                    {doctorMode === "active" && form.doctor ? ` (₹${parseFloat(form.doctor.consultation_fee ?? 0)})` : ""}
+                  </option>
+                  <option value="HOME_VISIT">Home Visit</option>
+                </select>
+              </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "18px", marginBottom: "18px" }}>
                 {/* Consultation Fee */}
                 <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <label style={labelStyle}>Consultation Fee (₹) <span style={{ color: "#EF4444" }}>*</span></label>
+                  <label style={labelStyle}>{form.type === "HOME_VISIT" ? "Home Visit Fee (₹)" : "Consultation Fee (₹)"} <span style={{ color: "#EF4444" }}>*</span></label>
                   <input
                     type="number" min="0"
-                    // READ-ONLY for active-doctor NEW (fee matches profile) | EDITABLE for common-doctor or follow-up override
+                    // READ-ONLY only for active-doctor NEW (fee matches profile) | EDITABLE for common-doctor, follow-up override, or Home Visit
                     readOnly={doctorMode === "active" && form.type === "NEW"}
+                    disabled={form.type === "HOME_VISIT" && loadingHomeVisitDefaults}
                     style={{
                       padding: "11px 14px", borderRadius: "9px",
                       border: "1.5px solid #E8EDF4", fontSize: "18px", fontWeight: 700,
@@ -1182,17 +1274,19 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
                     value={form.fee}
                     onChange={e => {
                       // Only allow changes when editable
-                      if (doctorMode === "common" || form.type === "REVISIT") set("fee", e.target.value);
+                      if (doctorMode === "common" || form.type === "REVISIT" || form.type === "HOME_VISIT") set("fee", e.target.value);
                     }}
-                    onFocus={e => { if (doctorMode === "common" || form.type === "REVISIT") e.target.style.borderColor = G; }}
+                    onFocus={e => { if (doctorMode === "common" || form.type === "REVISIT" || form.type === "HOME_VISIT") e.target.style.borderColor = G; }}
                     onBlur={e => e.target.style.borderColor = "#E8EDF4"}
                   />
                   <p style={{ fontSize: "11px", color: "#94A3B8", margin: 0 }}>
                     {form.type === "REVISIT"
                       ? "Free revisit — fee locked at ₹0"
-                      : doctorMode === "active"
-                        ? `Fixed rate for ${form.doctor?.full_name ?? "selected doctor"}`
-                        : "Enter the fee agreed with the guest doctor"}
+                      : form.type === "HOME_VISIT"
+                        ? "Home Visit Fee — mandatory, must be greater than ₹0"
+                        : doctorMode === "active"
+                          ? `Fixed rate for ${form.doctor?.full_name ?? "selected doctor"}`
+                          : "Enter the fee agreed with the guest doctor"}
                   </p>
                 </div>
 
@@ -1225,6 +1319,24 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
                 </div>
               )}
 
+              {/* Travel Charge — Home Visit only */}
+              {form.type === "HOME_VISIT" && (
+                <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "18px" }}>
+                  <label style={labelStyle}>Travel Charge (₹)</label>
+                  <input
+                    type="number" min="0"
+                    disabled={loadingHomeVisitDefaults}
+                    style={{ padding: "11px 14px", borderRadius: "9px", border: "1.5px solid #E8EDF4", fontSize: "14px", color: "#1E293B", outline: "none", width: "100%", boxSizing: "border-box" }}
+                    placeholder="0"
+                    value={form.travel_charge}
+                    onChange={e => set("travel_charge", e.target.value)}
+                    onFocus={e => e.target.style.borderColor = G}
+                    onBlur={e => e.target.style.borderColor = "#E8EDF4"}
+                  />
+                  <p style={{ fontSize: "11px", color: "#94A3B8", margin: 0 }}>Optional — defaults to ₹0 if left blank</p>
+                </div>
+              )}
+
               {/* Discount */}
               <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "18px" }}>
                 <label style={labelStyle}>Discount (₹)</label>
@@ -1254,15 +1366,32 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
 
               {/* Bill Summary */}
               {/* NOTE: The one-time MRD registration fee (HospitalSettings.mrd_registration_fee)
-                  is only known to the backend — reception doesn't have permission to read
-                  HospitalSettingsView. So the exact combined total can't be shown here before
-                  creation; instead we show an advisory note, and the actual computed total is
-                  surfaced in the success toast and everywhere else the bill is displayed
-                  afterwards (bill list, UPI dialog, revenue cards). */}
-              {form.type === "NEW" && form.patient && !form.patient.registration_fee_paid && (
+                  is fetched once on mount into `mrdFee` via the same branch-scoped
+                  home-visit-defaults endpoint reception already uses to prefill Home
+                  Visit fees — that endpoint deliberately also exposes mrd_registration_fee
+                  read-only for exactly this preview. So both the advisory note and the
+                  Bill Summary below can show the real ₹ amount and fold it straight into
+                  Total Payable, rather than a vague "added on generate" placeholder. The
+                  backend still independently (re)computes and locks in the authoritative
+                  registration_fee at creation time — this is a preview, not the source
+                  of truth — and that final figure is what's surfaced afterwards in the
+                  success toast, bill list, UPI dialog, and revenue cards. */}
+              {(() => {
+                const mrdFeeApplies = form.type === "NEW" && form.patient && !form.patient.registration_fee_paid;
+                const mrdFeeAmount = mrdFeeApplies ? (mrdFee ?? 0) : 0;
+                const totalPayable = Math.max(
+                  (parseFloat(form.fee) || 0)
+                  + (form.type === "HOME_VISIT" ? (parseFloat(form.travel_charge) || 0) : 0)
+                  + mrdFeeAmount
+                  - (parseFloat(form.discount_amount) || 0),
+                  0
+                );
+                return (
+              <>
+              {mrdFeeApplies && (
                 <div style={{ marginBottom: "14px", padding: "10px 14px", borderRadius: "10px", background: "#EFF6FF", color: "#2563EB", border: "1px solid #BFDBFE", fontSize: "12.5px", fontWeight: 500, display: "flex", gap: "8px", alignItems: "flex-start" }}>
                   <Ico d="M12 16v-4 M12 8h.01 M22 12a10 10 0 1 1-20 0 10 10 0 0 1 20 0" size={14} color="#2563EB" />
-                  A one-time MRD registration fee will be added automatically to this bill, since this patient hasn't been charged it before.
+                  A one-time MRD registration fee{mrdFee != null ? ` of ₹${mrdFee.toLocaleString("en-IN")}` : ""} will be added automatically to this bill, since this patient hasn't been charged it before.
                 </div>
               )}
               <div style={{ background: "#F8FAFC", borderRadius: "12px", padding: "14px 16px", marginBottom: "20px", border: "1px solid #F1F5F9" }}>
@@ -1271,19 +1400,24 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
                   {[
                     { l: "Patient",  v: `${form.patient?.full_name} (${form.patient?.mrd_number})` },
                     { l: "Doctor",   v: doctorMode === "active"
-                        ? `${form.doctor?.full_name} · ${form.doctor?.specialization ?? ""}`
+                        ? `${form.doctor?.full_name} · ${form.doctor?.specialty_name ?? ""}`
                         : form.doctor?.doctor_type === "guest"
                           ? `${guestDoctorName.trim()} · Guest`
                           : `${commonName.trim()} (Guest)` },
-                    { l: "Type",     v: form.type === "REVISIT" ? "Revisit Consultation" : "New Consultation" },
-                    { l: "Consultation Fee", v: `₹${form.fee || "0"}` },
-                    ...(form.type === "NEW" && form.patient && !form.patient.registration_fee_paid
-                      ? [{ l: "MRD Registration Fee", v: "added on generate", note: true }]
+                    { l: "Type",     v: form.type === "REVISIT" ? "Revisit Consultation" : form.type === "HOME_VISIT" ? "Home Visit" : "New Consultation" },
+                    { l: form.type === "HOME_VISIT" ? "Home Visit Fee" : "Consultation Fee", v: `₹${form.fee || "0"}` },
+                    ...(form.type === "HOME_VISIT" && parseFloat(form.travel_charge || 0) > 0
+                      ? [{ l: "Travel Charge", v: `₹${parseFloat(form.travel_charge).toLocaleString("en-IN")}` }]
+                      : []),
+                    ...(mrdFeeApplies
+                      ? [mrdFee != null
+                          ? { l: "MRD Registration Fee", v: `₹${mrdFee.toLocaleString("en-IN")}` }
+                          : { l: "MRD Registration Fee", v: "added on generate", note: true }]
                       : []),
                     ...(parseFloat(form.discount_amount || 0) > 0
                       ? [{ l: "Discount", v: `− ₹${parseFloat(form.discount_amount).toLocaleString("en-IN")}` }]
                       : []),
-                    { l: "Total Payable", v: `₹${Math.max((parseFloat(form.fee) || 0) - (parseFloat(form.discount_amount) || 0), 0).toLocaleString("en-IN")}${form.type === "NEW" && form.patient && !form.patient.registration_fee_paid ? " + MRD fee" : ""}`, bold: true },
+                    { l: "Total Payable", v: `₹${totalPayable.toLocaleString("en-IN")}`, bold: true },
                     { l: "Payment",  v: form.method === "UPI" ? `UPI${form.upi_reference ? ` · ${form.upi_reference}` : ""}` : "Cash" },
                   ].map(row => (
                     <div key={row.l} style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
@@ -1293,6 +1427,9 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
                   ))}
                 </div>
               </div>
+              </>
+                );
+              })()}
 
               <div style={{ display: "flex", gap: "10px" }}>
                 <button onClick={() => setStep(2)} style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "1.5px solid #E8EDF4", background: "#fff", color: "#475569", fontWeight: 600, cursor: "pointer", fontSize: "14px" }}>
@@ -1339,6 +1476,8 @@ export default function BillingPage({ quickBookPatient, onQuickBookClose }) {
   const [quickPatient, setQuickPatient] = useState(quickBookPatient ?? null);
   const [toast,    setToast]    = useState(null);
   const [convertTargetPrebooking, setConvertTargetPrebooking] = useState(null);
+  const [cancelPrebookingTarget, setCancelPrebookingTarget] = useState(null);
+  const [cancellingPrebooking, setCancellingPrebooking] = useState(false);
 
   // Keep filter in sync if the user arrives again via a different notification link
   useEffect(() => {
@@ -1554,6 +1693,31 @@ export default function BillingPage({ quickBookPatient, onQuickBookClose }) {
       <ConfirmPaymentDialog bill={payDialog} onConfirm={handlePaymentConfirm} onCancel={() => setPayDialog(null)} paying={paying} />
       <ReassignDoctorDialog bill={reassignTarget} doctors={doctors} onConfirm={handleReassign} onCancel={() => setReassignTarget(null)} saving={reassigning} />
       <CancelAppointmentDialog bill={cancelTarget} onConfirm={handleCancelAppointment} onCancel={() => setCancelTarget(null)} cancelling={cancelling} />
+      {cancelPrebookingTarget && (
+        <ConfirmDialog
+          title="Cancel prebooking?"
+          message={`Cancel the prebooking for ${cancelPrebookingTarget.patient_name}?`}
+          confirmLabel="Yes, cancel it"
+          cancelLabel="No, keep it"
+          danger
+          loading={cancellingPrebooking}
+          onConfirm={async () => {
+            setCancellingPrebooking(true);
+            try {
+              await cancelPrebooking(cancelPrebookingTarget.prebooking_id);
+              showToast("Prebooking cancelled.", true);
+              setCancelPrebookingTarget(null);
+              load();
+            } catch (e) {
+              showToast(e.response?.data?.detail || e.message || "Failed to cancel.", false);
+              setCancelPrebookingTarget(null);
+            } finally {
+              setCancellingPrebooking(false);
+            }
+          }}
+          onClose={() => !cancellingPrebooking && setCancelPrebookingTarget(null)}
+        />
+      )}
 
       {/* Header */}
       <div style={{ marginBottom: "24px", display: "flex", alignItems: "center", gap: "14px", flexWrap: "wrap" }}>
@@ -1706,16 +1870,7 @@ export default function BillingPage({ quickBookPatient, onQuickBookClose }) {
                         style={{ padding: "6px 14px", borderRadius: "8px", border: "none", background: G, color: "#fff", fontSize: "12px", fontWeight: 600, cursor: "pointer", boxShadow: "0 2px 6px #16a34a28" }}>
                         Convert to Bill
                       </button>
-                      <button onClick={async () => {
-                        if (!window.confirm(`Cancel the prebooking for ${b.patient_name}?`)) return;
-                        try {
-                          await cancelPrebooking(b.prebooking_id);
-                          showToast("Prebooking cancelled.", true);
-                          load();
-                        } catch (e) {
-                          showToast(e.response?.data?.detail || e.message || "Failed to cancel.", false);
-                        }
-                      }}
+                      <button onClick={() => setCancelPrebookingTarget(b)}
                         style={{ padding: 0, border: "none", background: "none", color: "#DC2626", fontSize: "11px", fontWeight: 600, cursor: "pointer", marginTop: "4px" }}>
                         Cancel prebooking
                       </button>

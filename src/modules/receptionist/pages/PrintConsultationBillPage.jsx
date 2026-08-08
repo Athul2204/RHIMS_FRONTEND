@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { getBillDetail } from "../api/receptionApi";
+import { flattenFormError } from "../../../utils/formErrors";
 
 const G = "#16A34A";
 const LIGHT_G = "#DCFCE7";
@@ -29,7 +30,7 @@ export default function PrintConsultationBillPage() {
   useEffect(() => {
     getBillDetail(billId)
       .then(setBill)
-      .catch(e => setError(String(e)))
+      .catch(e => setError(flattenFormError(e)))
       .finally(() => setLoading(false));
   }, [billId]);
 

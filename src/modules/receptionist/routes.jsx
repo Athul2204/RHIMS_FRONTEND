@@ -7,6 +7,8 @@ import BillingPage            from "./pages/BillingPage";
 import FollowUpRemindersPage  from "./pages/FollowUpRemindersPage";
 import PreBookingsPage        from "./pages/PreBookingsPage";
 import PrintConsultationBillPage from "./pages/PrintConsultationBillPage";
+import PharmacyBillsPage      from "./pages/PharmacyBillsPage";
+import PrintPharmacyBillPage  from "./pages/PrintPharmacyBillPage";
 
 export default function ReceptionistRoutes() {
   return (
@@ -17,6 +19,8 @@ export default function ReceptionistRoutes() {
       <Route path="billing"             element={<BillingPage />} />
       <Route path="billing/print/:billId" element={<PrintConsultationBillPage />} />
       <Route path="follow-up-reminders" element={<FollowUpRemindersPage />} />
+      <Route path="pharmacy-bills"            element={<PharmacyBillsPage />} />
+      <Route path="pharmacy-bills/print/:billId" element={<PrintPharmacyBillPage />} />
     
       <Route path="prebookings"         element={<PreBookingsPage />} />
       <Route path="*"                   element={<Navigate to="/reception" replace />} />

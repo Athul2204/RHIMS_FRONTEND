@@ -9,12 +9,13 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   getBills, getBillDetail, addMedicine, removeMedicineItem, updateMedicineItem,
   markBillPaid, completeBill, reopenBill, cancelBill, getBatches,
-  transitionBillToOpen, setBillDiscount,
+  transitionBillToOpen, setBillDiscount, sendBillToReception,
   addProcedure, removeProcedureItem, updateProcedureItem, getPrescriptionItems,
   searchGeneralItems, addGeneralItem, removeGeneralItem, updateGeneralItemBillItem,
 } from "../api/pharmacistApi";
 import API from "../../../api";
 import WalkInBillPage from "./WalkInBillPage";
+import { flattenFormError } from "../../../utils/formErrors";
 
 const G = "#8B5CF6";
 const INP = { padding: "9px 12px", borderRadius: 8, border: "1.5px solid #E5E7EB", fontSize: 13, color: "#1E293B", outline: "none", background: "#fff", width: "100%", boxSizing: "border-box" };
@@ -109,7 +110,7 @@ function Stepper({ status }) {
 }
 
 // ── Prescribed Medicines Display ────────────────────────────────────
-function PrescribedMedicines({ billId, prescriptionId, onAdded, onError, onClose }) {
+function PrescribedMedicines({ billId, prescriptionId, addedPrescriptionItemIds, onAdded, onError, onClose }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [adding, setAdding] = useState(new Set());
@@ -128,7 +129,7 @@ function PrescribedMedicines({ billId, prescriptionId, onAdded, onError, onClose
       }
     } catch(e) {
       console.error("Prescription fetch error:", e);
-      onError("Failed to load prescribed medicines: " + String(e));
+      onError("Failed to load prescribed medicines: " + flattenFormError(e));
       setItems([]);
     } finally {
       setLoading(false);
@@ -138,6 +139,13 @@ function PrescribedMedicines({ billId, prescriptionId, onAdded, onError, onClose
   useEffect(() => {
     loadPrescriptionItems();
   }, [loadPrescriptionItems]);
+
+  // ✅ FIX: Once a prescribed item has been added to the bill's Medicine
+  // Items list, it should disappear from this "to add" panel instead of
+  // continuing to show an "Add" button for something already added.
+  const remainingItems = items.filter(
+    item => !addedPrescriptionItemIds?.has(item.prescription_item_id)
+  );
 
   const handleAddMedicine = async (item) => {
     // ✅ FIX: FetchPrescriptionMedicinesView returns flat fields
@@ -175,7 +183,7 @@ function PrescribedMedicines({ billId, prescriptionId, onAdded, onError, onClose
       });
       onAdded();
     } catch(e) {
-      onError("Failed to add medicine: " + String(e));
+      onError("Failed to add medicine: " + flattenFormError(e));
     } finally {
       setAdding(prev => { const s = new Set(prev); s.delete(item.prescription_item_id); return s; });
     }
@@ -200,9 +208,11 @@ function PrescribedMedicines({ billId, prescriptionId, onAdded, onError, onClose
         <p style={{ fontSize:12, color:"#64748B", margin:0 }}>Loading medicines…</p>
       ) : items.length === 0 ? (
         <p style={{ fontSize:12, color:"#64748B", margin:0 }}>No prescribed medicines found.</p>
+      ) : remainingItems.length === 0 ? (
+        <p style={{ fontSize:12, color:"#64748B", margin:0 }}>All prescribed medicines have been added to this bill.</p>
       ) : (
         <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
-          {items.map(item => (
+          {remainingItems.map(item => (
             <div key={item.prescription_item_id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:8 }}>
               <div style={{ flex:1 }}>
                 <p style={{ fontSize:11, fontWeight:600, color:"#0F172A", margin:0 }}>{item.medicine_name}</p>
@@ -284,7 +294,7 @@ function AddMedicineForm({ billId, batches, onAdded, onError }) {
       setQty(1);
       onAdded();
     } catch(e) {
-      onError(String(e));
+      onError(flattenFormError(e));
     } finally {
       setSaving(false);
     }
@@ -441,7 +451,7 @@ function AddProcedureForm({ billId, procedures, onAdded, onError }) {
       setQty(1);
       onAdded();
     } catch(e) {
-      onError(String(e));
+      onError(flattenFormError(e));
     } finally {
       setSaving(false);
     }
@@ -577,7 +587,7 @@ function AddGeneralItemForm({ billId, onAdded, onError }) {
         const resp = await searchGeneralItems(search.trim(), 12);
         setResults(Array.isArray(resp) ? resp : (resp?.results ?? []));
       } catch (e) {
-        onError(String(e));
+        onError(flattenFormError(e));
       } finally {
         setSearching(false);
       }
@@ -619,7 +629,7 @@ function AddGeneralItemForm({ billId, onAdded, onError }) {
       setQty(1);
       onAdded();
     } catch (e) {
-      onError(String(e));
+      onError(flattenFormError(e));
     } finally {
       setSaving(false);
     }
@@ -773,7 +783,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       setDispensed(new Set());
     } catch(e) { 
       console.error("Error loading bill detail:", e);
-      showToast(String(e), false); 
+      showToast(flattenFormError(e), false); 
     }
     finally { setLoading(false); }
   }, [billId]);
@@ -786,7 +796,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       await removeMedicineItem(billId, itemId);
       showToast("Medicine removed");
       await load();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setRemoving(null); }
   };
 
@@ -796,7 +806,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       await removeProcedureItem(billId, itemId);
       showToast("Procedure removed");
       await load();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setRemoving(null); }
   };
 
@@ -823,7 +833,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       setEditingMedItem(null);
       setEditQty("");
       await load();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setSavingEdit(false); }
   };
 
@@ -846,7 +856,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       setNewProcName("");
       setNewProcAmount("");
       await load();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setCreatingProc(false); }
   };
 
@@ -873,7 +883,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       setEditingProcItem(null);
       setEditProcQty("");
       await load();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setSavingProcEdit(false); }
   };
 
@@ -893,7 +903,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       await setBillDiscount(billId, discountVal);
       showToast("Discount updated");
       await load();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setDiscountSaving(false); }
   };
 
@@ -904,7 +914,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       await removeGeneralItem(billId, itemId);
       showToast("Item removed");
       await load();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setRemoving(null); }
   };
 
@@ -931,7 +941,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       setEditingGenItem(null);
       setEditGenQty("");
       await load();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setSavingGenEdit(false); }
   };
 
@@ -954,7 +964,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       await load();
     } catch(e) { 
       console.error("Failed to complete bill:", e);
-      showToast(String(e), false); 
+      showToast(flattenFormError(e), false); 
     }
     finally { setBusy(false); }
   };
@@ -965,7 +975,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       await transitionBillToOpen(billId);
       showToast("Bill opened! Now you can complete it.");
       await load();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setBusy(false); }
   };
 
@@ -982,7 +992,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       setShowPaymentModal(false);
       await load();
       onRefreshList();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setBusy(false); }
   };
 
@@ -992,7 +1002,18 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       await reopenBill(billId);
       showToast("Bill reopened!");
       await load();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
+    finally { setBusy(false); }
+  };
+
+  const handleSendToReception = async () => {
+    setBusy(true);
+    try {
+      await sendBillToReception(billId);
+      showToast("✓ Bill sent to reception!");
+      await load();
+      onRefreshList();
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setBusy(false); }
   };
 
@@ -1004,7 +1025,7 @@ function BillDetail({ billId, onClose, onRefreshList }) {
       showToast("Bill cancelled");
       onClose();
       onRefreshList();
-    } catch(e) { showToast(String(e), false); }
+    } catch(e) { showToast(flattenFormError(e), false); }
     finally { setBusy(false); }
   };
 
@@ -1071,6 +1092,11 @@ function BillDetail({ billId, onClose, onRefreshList }) {
         <PrescribedMedicines
           billId={billId}
           prescriptionId={bill.prescription}
+          addedPrescriptionItemIds={new Set(
+            (bill.medicine_items || [])
+              .map(mi => mi.prescription_item)
+              .filter(id => id !== null && id !== undefined)
+          )}
           onAdded={load}
           onError={showToast}
           onClose={() => setShowPrescribed(false)}
@@ -1547,22 +1573,59 @@ function BillDetail({ billId, onClose, onRefreshList }) {
         )}
 
         {bill.bill_status === "PAID" && (
-          <button
-            onClick={() => navigate(`/pharmacy/bills/print/${billId}`)}
-            style={{
-              gridColumn: "1 / -1",
-              display:"flex", alignItems:"center", justifyContent:"center", gap:8,
-              padding:"10px",
-              borderRadius:8,
-              border:"none",
-              background:G,
-              color:"#fff",
-              fontWeight:700,
-              fontSize:13,
-              cursor:"pointer",
-            }}>
-            <Ico d={ICONS.print} size={14} color="#fff" /> Print Bill
-          </button>
+          <>
+            <button
+              onClick={() => navigate(`/pharmacy/bills/print/${billId}`)}
+              style={{
+                gridColumn: "1 / -1",
+                display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+                padding:"10px",
+                borderRadius:8,
+                border:"none",
+                background:G,
+                color:"#fff",
+                fontWeight:700,
+                fontSize:13,
+                cursor:"pointer",
+              }}>
+              <Ico d={ICONS.print} size={14} color="#fff" /> Print Bill
+            </button>
+
+            {bill.sent_to_reception ? (
+              <div style={{
+                gridColumn: "1 / -1",
+                display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+                padding:"10px",
+                borderRadius:8,
+                border:"1.5px solid #BBF7D0",
+                background:"#F0FDF4",
+                color:"#15803D",
+                fontWeight:700,
+                fontSize:13,
+              }}>
+                <Ico d={ICONS.check} size={14} color="#15803D" /> Sent to Reception
+              </div>
+            ) : (
+              <button
+                onClick={handleSendToReception}
+                disabled={busy}
+                style={{
+                  gridColumn: "1 / -1",
+                  display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+                  padding:"10px",
+                  borderRadius:8,
+                  border:"1.5px solid " + G,
+                  background:"#fff",
+                  color:G,
+                  fontWeight:700,
+                  fontSize:13,
+                  cursor: busy ? "not-allowed" : "pointer",
+                  opacity: busy ? 0.7 : 1,
+                }}>
+                {busy ? "…" : "→ Send to Reception"}
+              </button>
+            )}
+          </>
         )}
       </div>
 

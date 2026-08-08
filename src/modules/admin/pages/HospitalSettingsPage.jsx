@@ -1,6 +1,7 @@
 // src/modules/admin/pages/HospitalSettingsPage.jsx
 import { useEffect, useState } from "react";
 import { getHospitalSettings, patchHospitalSettings } from "../api/adminApi";
+import { useAuth } from "../../../context/AuthContext";
 
 const G = "#16A34A";
 
@@ -40,6 +41,14 @@ const SectionCard = ({ title, icon, children }) => (
 );
 
 export default function HospitalSettingsPage() {
+  const { isGroupAdmin, branches, branchContextLoading, ownBranch, selectedBranch } = useAuth();
+
+  // Group admin has no branch of their own — HospitalSettingsView requires
+  // ?branch=<id> from them (see adminApi.getHospitalSettings). Default to
+  // whichever branch they're currently active in (picked on
+  // SelectBranchPage), falling back to the first branch in the list if
+  // they're in "All Branches" mode.
+  const [viewBranch, setViewBranch] = useState(null);
   const [settings, setSettings] = useState(null);
   const [loading, setLoading]   = useState(true);
   const [saving, setSaving]     = useState(false);
@@ -48,22 +57,41 @@ export default function HospitalSettingsPage() {
   const [mrdFee, setMrdFee]     = useState("");
 
   useEffect(() => {
+    if (isGroupAdmin && !viewBranch && branches.length > 0) {
+      const preferred = selectedBranch && branches.some(b => b.branch_id === selectedBranch)
+        ? selectedBranch
+        : branches[0].branch_id;
+      setViewBranch(preferred);
+    }
+  }, [isGroupAdmin, branches, viewBranch, selectedBranch]);
+
+  const targetBranchId = isGroupAdmin ? viewBranch : null;
+
+  useEffect(() => {
+    // Group admin: wait until a branch is picked before calling the
+    // endpoint at all — omitting ?branch= gets a 400, not "all branches".
+    if (isGroupAdmin && !targetBranchId) {
+      setLoading(branchContextLoading);
+      return;
+    }
     setLoading(true);
-    getHospitalSettings()
+    setError("");
+    getHospitalSettings(targetBranchId)
       .then(data => {
         setSettings(data);
         setMrdFee(data.mrd_registration_fee ?? "0");
       })
       .catch(() => setError("Failed to load hospital settings."))
       .finally(() => setLoading(false));
-  }, []);
+  }, [targetBranchId, isGroupAdmin, branchContextLoading]);
 
   const handleSave = async () => {
     setSaving(true); setError(""); setSuccess("");
     try {
-      const res = await patchHospitalSettings({
-        mrd_registration_fee: parseFloat(mrdFee) || 0,
-      });
+      const res = await patchHospitalSettings(
+        { mrd_registration_fee: parseFloat(mrdFee) || 0 },
+        targetBranchId
+      );
       setSettings(res);
       setSuccess("Settings saved successfully.");
       setTimeout(() => setSuccess(""), 4000);
@@ -97,11 +125,36 @@ export default function HospitalSettingsPage() {
     <div style={{ background:"#F8FAFC", minHeight:"100%", margin:"-20px -16px", padding:"24px" }}>
 
       {/* Page Header */}
-      <div style={{ marginBottom:"24px" }}>
-        <h1 style={{ fontSize:"20px", fontWeight:700, color:"#0F172A", margin:0 }}>Hospital Settings</h1>
-        <p style={{ fontSize:"13px", color:"#64748B", marginTop:"4px" }}>
-          Configure hospital-wide defaults and fee structures.
-        </p>
+      <div style={{ marginBottom:"24px", display:"flex", alignItems:"flex-end", justifyContent:"space-between", flexWrap:"wrap", gap:"16px" }}>
+        <div>
+          <h1 style={{ fontSize:"20px", fontWeight:700, color:"#0F172A", margin:0 }}>Hospital Settings</h1>
+          <p style={{ fontSize:"13px", color:"#64748B", marginTop:"4px" }}>
+            {isGroupAdmin
+              ? "Per-branch defaults and fee structures — pick a branch below."
+              : "Configure your branch's defaults and fee structures."}
+          </p>
+        </div>
+
+        {isGroupAdmin ? (
+          <div style={{ display:"flex", flexDirection:"column", gap:"5px" }}>
+            <label style={{ fontSize:"11px", fontWeight:600, color:"#94A3B8", textTransform:"uppercase", letterSpacing:"0.4px" }}>Branch</label>
+            <select
+              value={viewBranch ?? ""}
+              onChange={e => setViewBranch(Number(e.target.value))}
+              style={{ ...inp, width:"auto", minWidth:"220px", cursor:"pointer" }}
+            >
+              {branches.length === 0 && <option value="">No branches yet</option>}
+              {branches.map(b => (
+                <option key={b.branch_id} value={b.branch_id}>{b.name} ({b.code})</option>
+              ))}
+            </select>
+          </div>
+        ) : ownBranch ? (
+          <div style={{ display:"flex", alignItems:"center", gap:"7px", padding:"7px 14px", borderRadius:"9px", background:"#F0FDF4", border:"1px solid #BBF7D0", fontSize:"12.5px", fontWeight:600, color:"#15803D" }}>
+            <Ico path={ICONS.hospital} size={13} color="#15803D" />
+            {ownBranch.name} <span style={{ fontFamily:"monospace", fontSize:"11px", color:"#64748B" }}>({ownBranch.code})</span>
+          </div>
+        ) : null}
       </div>
 
       {error && (
@@ -116,6 +169,10 @@ export default function HospitalSettingsPage() {
       {loading ? (
         <div style={{ background:"#fff", borderRadius:"16px", padding:"48px", textAlign:"center", border:"1px solid #F1F5F9" }}>
           <div style={{ color:"#94A3B8", fontSize:"14px" }}>Loading settings…</div>
+        </div>
+      ) : isGroupAdmin && !viewBranch ? (
+        <div style={{ background:"#fff", borderRadius:"16px", padding:"48px", textAlign:"center", border:"1px solid #F1F5F9" }}>
+          <div style={{ color:"#94A3B8", fontSize:"14px" }}>No branches available yet — create one under Branch Management first.</div>
         </div>
       ) : (
         <div style={{ maxWidth:"680px" }}>

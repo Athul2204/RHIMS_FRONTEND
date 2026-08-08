@@ -12,6 +12,7 @@ export default function CommonReceptionistsPage() {
       entityLabelPlural="Common Receptionists"
       idField="common_receptionist_id"
       basePath="/administration/common-receptionists/"
+      accentColor="#10B981"
       api={{
         list:       getCommonReceptionistList,
         create:     createCommonReceptionist,

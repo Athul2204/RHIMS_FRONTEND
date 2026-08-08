@@ -225,8 +225,13 @@ export default function LabPanelsPage() {
 
   const filteredGroups = useMemo(() => {
     const q = searchTerm.trim().toLowerCase();
-    if (!q) return groups;
-    return groups.filter((g) => g.name.toLowerCase().includes(q) || g.code.toLowerCase().includes(q));
+    const base = q ? groups.filter((g) => g.name.toLowerCase().includes(q) || g.code.toLowerCase().includes(q)) : groups;
+    // The backend returns panels ordered by name (its default) — re-sort
+    // here by creation time, newest first, so S.No 1 is the most recent.
+    return base.slice().sort((a, b) => {
+      if (a.created_at && b.created_at) return new Date(b.created_at) - new Date(a.created_at);
+      return (b.group_id ?? 0) - (a.group_id ?? 0);
+    });
   }, [groups, searchTerm]);
 
   const testsByGroup = useMemo(() => {
@@ -331,6 +336,9 @@ export default function LabPanelsPage() {
             return (
               <div key={g.group_id} style={{ borderTop: i > 0 ? `1px solid ${GRAY[100]}` : "none" }}>
                 <div style={{ display: "flex", alignItems: "center", padding: "14px 16px", gap: "12px" }}>
+                  <span style={{ fontSize: "12px", fontWeight: 600, color: GRAY[400], minWidth: "18px", textAlign: "right" }}>
+                    {i + 1}
+                  </span>
                   <button
                     onClick={() => setExpandedGroupId(isExpanded ? null : g.group_id)}
                     style={{ background: "none", border: "none", cursor: "pointer", padding: 4, transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}

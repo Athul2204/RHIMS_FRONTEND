@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import API from "../../api";
+import BranchSwitcher from "./BranchSwitcher";
 
 /* ─── SVG Icon ─── */
 const Icon = ({ d, size = 18, extra = "" }) => (
@@ -43,6 +44,8 @@ const ICONS = {
   monthlyReport: { d: "M8 2v4 M16 2v4 M3 10h18 M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z M8 14h.01 M12 14h.01 M16 14h.01 M8 18h.01 M12 18h.01" },
   dealer:        { d: "M1 3h15v13H1z M16 8h4l3 3v5h-7V8z", extra: "M5.5 21a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z M18.5 21a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z" },
   generalItems:  { d: "M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z", extra: "M3 6h18 M16 10a4 4 0 0 1-8 0" },
+  globe:         { d: "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M2 12h20", extra: "M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" },
+  building:      { d: "M3 21h18 M6 21V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v14", extra: "M9 9h1 M14 9h1 M9 13h1 M14 13h1 M9 17h1 M14 17h1" },
 };
 
 /* ─── Nav config ─── */
@@ -50,6 +53,7 @@ const NAV = {
   admin: {
     main: [
       { label: "Dashboard",       to: "/admin",               icon: "dashboard" },
+      { label: "Branches",        to: "/admin/branches",      icon: "building" },
       { label: "Staff",           to: "/admin/staff",         icon: "staff" },
     ],
     catalog: [
@@ -62,6 +66,9 @@ const NAV = {
       { label: "Managers",        to: "/admin/managers",      icon: "user" },
       { label: "Guest Doctors",   to: "/admin/guest-doctors", icon: "guest" },
       { label: "Procedures",      to: "/admin/procedures",    icon: "procedure" },
+    ],
+    website: [
+      { label: "Website Management", to: "/admin/website",    icon: "globe" },
     ],
     help: [
       { label: "Audit Logs",      to: "/admin/audit",         icon: "audit" },
@@ -89,6 +96,7 @@ const NAV = {
     ],
     catalog: [
       { label: "Billing",             to: "/reception/billing",             icon: "billing" },
+      { label: "Pharmacy Bills",      to: "/reception/pharmacy-bills",      icon: "billing" },
       { label: "Follow-up Reminders", to: "/reception/follow-up-reminders", icon: "appointment" },
     ],
     help: [],
@@ -133,11 +141,15 @@ const NAV = {
       { label: "Leave Requests", to: "/manager/leaves",         icon: "clock" },
       { label: "Salary",         to: "/manager/salary",         icon: "billing" },
       { label: "Expenses",       to: "/manager/expenses",       icon: "billing" },
+      { label: "Income",        to: "/manager/income",         icon: "billing" },
       { label: "Dealers",        to: "/manager/dealers",        icon: "dealer" },
       { label: "Procedures",     to: "/manager/procedures",     icon: "procedure" },
     ],
     reports: [
       { label: "Bills Overview", to: "/manager/bills",          icon: "monthlyReport" },
+    ],
+    website: [
+      { label: "Website Management", to: "/manager/website",    icon: "globe" },
     ],
     help: [],
   },
@@ -151,6 +163,7 @@ const GROUP_LABELS = {
   labtechnician: { catalog: "OPERATIONS", reports: "",        help: "" },
   manager:       { catalog: "HR & OPS",   reports: "FINANCE", help: "" },
 };
+const WEBSITE_GROUP_LABEL = "WEBSITE";
 
 const ROLE_META = {
   admin:         { label: "Administrator",  color: "#16A34A", initials: "AD" },
@@ -210,7 +223,7 @@ const SIDEBAR_W   = 232;
 const COLLAPSED_W = 64;
 
 export default function DashboardLayout({ children }) {
-  const { user, logout } = useAuth();
+  const { user, logout, isGroupAdmin } = useAuth();
   const [collapsed,     setCollapsed]     = useState(false);
   const [mobileOpen,    setMobileOpen]    = useState(false);
   const [showNotif,     setShowNotif]     = useState(false);
@@ -223,7 +236,13 @@ export default function DashboardLayout({ children }) {
   const profileRef = useRef(null);
 
   const role        = user?.role ?? "admin";
-  const navGroups   = NAV[role] ?? NAV.admin;
+  const baseNavGroups = NAV[role] ?? NAV.admin;
+  // Branch Management is group-admin (or superuser) only — an ordinary
+  // branch-scoped admin has nothing to do there (their one branch can't be
+  // edited from that page), so the link shouldn't even appear for them.
+  const navGroups = (role === "admin" && !isGroupAdmin)
+    ? { ...baseNavGroups, main: (baseNavGroups.main ?? []).filter(item => item.to !== "/admin/branches") }
+    : baseNavGroups;
   const groupLabels = GROUP_LABELS[role] ?? GROUP_LABELS.admin;
   const meta        = ROLE_META[role] ?? ROLE_META.admin;
   const { label: roleLabel, color: accent, initials } = meta;
@@ -371,6 +390,9 @@ export default function DashboardLayout({ children }) {
         <NavGroup label={groupLabels.catalog} items={navGroups.catalog ?? []} onClose={onClose} />
         {(navGroups.reports ?? []).length > 0 && (
           <NavGroup label={groupLabels.reports} items={navGroups.reports} onClose={onClose} />
+        )}
+        {(navGroups.website ?? []).length > 0 && (
+          <NavGroup label={WEBSITE_GROUP_LABEL} items={navGroups.website} onClose={onClose} />
         )}
         {(navGroups.help ?? []).length > 0 && (
           <NavGroup label={groupLabels.help} items={navGroups.help} onClose={onClose} />
@@ -555,6 +577,9 @@ export default function DashboardLayout({ children }) {
                 </div>
               )}
             </div>
+
+            {/* ── Branch Switcher (group admins) / Branch Badge (branch admins) ── */}
+            <BranchSwitcher />
 
             {/* Divider */}
             <div style={{ width: "1px", height: "24px", background: "#E8EDF4", margin: "0 4px" }} />

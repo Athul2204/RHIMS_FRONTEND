@@ -8,6 +8,7 @@
 // the thin wrappers that supply those props.
 import { useEffect, useState, useCallback } from "react";
 import { Toast, useToast } from "../../../components/shared/Toast";
+import useBranchScope from "../hooks/useBranchScope";
 
 const Ico = ({ path, size = 16, color = "currentColor" }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -73,7 +74,7 @@ const Modal = ({ title, subtitle, onClose, children }) => (
   </div>
 );
 
-const EMPTY_FORM = { username: "", password: "", email: "" };
+const EMPTY_FORM = { username: "", password: "", email: "", branch: "" };
 
 /**
  * @param {object} props
@@ -93,6 +94,7 @@ export default function CommonStaffPage({
   api,
 }) {
   const G = accentColor;
+  const { isGroupAdmin, branches, selectedBranch, listParams } = useBranchScope();
   const [rows, setRows]             = useState([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState("");
@@ -116,8 +118,9 @@ export default function CommonStaffPage({
     let url = `${basePath}?`;
     if (showAll) url += "all=true&";
     if (search)  url += `search=${encodeURIComponent(search)}&`;
+    if (listParams.branch) url += `branch=${encodeURIComponent(listParams.branch)}&`;
     return url;
-  }, [showAll, search, basePath]);
+  }, [showAll, search, basePath, listParams]);
 
   // ── Load ────────────────────────────────────────────────────────────────
   const loadRows = useCallback((url) => {
@@ -138,7 +141,7 @@ export default function CommonStaffPage({
 
   // ── Modal helpers ────────────────────────────────────────────────────────
   const openAdd = () => {
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, branch: selectedBranch ?? "" });
     setFormError("");
     setShowPass(false);
     setModal("add");
@@ -150,6 +153,7 @@ export default function CommonStaffPage({
       username: r.username ?? "",
       password: "",   // never pre-fill
       email:    r.email ?? "",
+      branch:   r.branch ?? "",
     });
     setFormError("");
     setShowPass(false);
@@ -162,6 +166,7 @@ export default function CommonStaffPage({
   const handleSubmit = async () => {
     if (!form.username.trim()) { setFormError("Username is required."); return; }
     if (modal === "add" && !form.password.trim()) { setFormError("Password is required."); return; }
+    if (isGroupAdmin && modal === "add" && !form.branch) { setFormError("Branch is required."); return; }
 
     setSubmitting(true);
     setFormError("");
@@ -175,6 +180,11 @@ export default function CommonStaffPage({
           email:    form.email.trim(),
           ...(form.password.trim() ? { password: form.password } : {}),
         },
+        // Unlike Guest Doctor, branch IS required here for a group admin
+        // (branch_required_on_write defaults to True for common staff) —
+        // never sent at all for a branch-scoped admin, resolved
+        // automatically server-side.
+        ...(isGroupAdmin && form.branch ? { branch: Number(form.branch) } : {}),
       };
 
       if (modal === "add") {
@@ -264,7 +274,11 @@ export default function CommonStaffPage({
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead style={{ background: "#F8FAFC" }}>
               <tr>
-                {["Code", "Name", "Login", "Status", "Actions"].map(h => (
+                {[
+                  "Code", "Name",
+                  ...(isGroupAdmin ? ["Branch"] : []),
+                  "Login", "Status", "Actions",
+                ].map(h => (
                   <th key={h} style={{ padding: "11px 14px", textAlign: "left", fontSize: "11px", fontWeight: 600, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.5px", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
@@ -273,7 +287,7 @@ export default function CommonStaffPage({
               {loading ? (
                 Array.from({ length: 4 }).map((_, i) => (
                   <tr key={i} style={{ borderTop: "1px solid #F8FAFC" }}>
-                    {Array.from({ length: 5 }).map((_, j) => (
+                    {Array.from({ length: isGroupAdmin ? 6 : 5 }).map((_, j) => (
                       <td key={j} style={{ padding: "14px" }}>
                         <div style={{ height: "14px", borderRadius: "4px", background: "#F1F5F9", animation: "pulse 1.5s infinite" }} />
                       </td>
@@ -282,7 +296,7 @@ export default function CommonStaffPage({
                 ))
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} style={{ padding: "48px", textAlign: "center", color: "#94A3B8", fontSize: "14px" }}>
+                  <td colSpan={isGroupAdmin ? 6 : 5} style={{ padding: "48px", textAlign: "center", color: "#94A3B8", fontSize: "14px" }}>
                     <Ico path={ICONS.user} size={36} color="#CBD5E1" /><br />
                     <span style={{ marginTop: "8px", display: "block" }}>No {entityLabelPlural.toLowerCase()} found.</span>
                   </td>
@@ -307,6 +321,14 @@ export default function CommonStaffPage({
                         <span style={{ fontSize: "13px", fontWeight: 600, color: "#1E293B" }}>{r.full_name || "—"}</span>
                       </div>
                     </td>
+                    {isGroupAdmin && (
+                      <td style={{ padding: "12px 14px", fontSize: "12px", color: "#475569", whiteSpace: "nowrap" }}>
+                        {(() => {
+                          const b = branches.find(b => b.branch_id === r.branch);
+                          return b ? `${b.name} (${b.code})` : "—";
+                        })()}
+                      </td>
+                    )}
                     <td style={{ padding: "12px 14px" }}>
                       {r.username ? (
                         <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", fontSize: "12px", background: "#DBEAFE", color: "#1D4ED8", padding: "3px 9px", borderRadius: "20px", fontWeight: 600 }}>
@@ -384,6 +406,22 @@ export default function CommonStaffPage({
                 onChange={e => set("email", e.target.value)}
                 placeholder="staff@hospital.com" />
             </Field>
+
+            {isGroupAdmin && (
+              <Field label="Branch" required>
+                {modal === "add" && selectedBranch ? (
+                  <div style={{ ...inp, display: "flex", alignItems: "center", justifyContent: "space-between", background: "#F8FAFC", color: "#475569" }}>
+                    <span>{branches.find(b => b.branch_id === selectedBranch)?.name ?? "Selected branch"}</span>
+                    <span style={{ fontSize: "11px", color: "#94A3B8" }}>locked to header selection</span>
+                  </div>
+                ) : (
+                  <select style={{ ...inp, cursor: "pointer" }} value={form.branch} onChange={e => set("branch", e.target.value)}>
+                    <option value="">— Select a branch —</option>
+                    {branches.map(b => <option key={b.branch_id} value={b.branch_id}>{b.name} ({b.code})</option>)}
+                  </select>
+                )}
+              </Field>
+            )}
 
             <Field
               label="Password"

@@ -1,7 +1,7 @@
 // src/modules/manager/pages/ManagerDashboardPage.jsx
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { getFinanceDashboard } from "../api/managerApi";
+import { getFinanceDashboard, getHomeVisitSettings, patchHomeVisitSettings } from "../api/managerApi";
 
 const ACCENT = "#6366F1";
 const GREEN  = "#16A34A";
@@ -60,15 +60,25 @@ function ExpenseBreakdown({ expenses, navigate }) {
   const buckets = [
     { label: "Manual Expenses",     value: expenses.manual?.total            || 0, color: "#F59E0B" },
     { label: "Salary Paid",         value: expenses.salary_paid?.amount      || 0, color: "#8B5CF6" },
-    { label: "Medicine Purchases",  value: expenses.medicine_purchases?.amount || 0, color: "#EC4899" },
-    { label: "Supply Purchases",    value: expenses.supply_purchases?.amount   || 0, color: "#16A34A" },
+    // ✅ FIX: this figure is the full invoice value the moment stock is
+    // received (accrual), not "amount actually paid" — it used to sit here
+    // unlabeled next to genuinely-cash figures like "Salary Paid", so a
+    // partial payment on the Dealers page (e.g. ₹100 paid of a ₹150
+    // purchase) looked like a contradiction with the ₹150 shown here.
+    // `due` (from the same reconciliation the Dealers ledger uses) is
+    // now shown alongside it so the gap is explained, not hidden.
+    { label: "Medicine Purchases",  value: expenses.medicine_purchases?.amount || 0, color: "#EC4899", due: expenses.medicine_purchases?.due || 0 },
+    { label: "Supply Purchases",    value: expenses.supply_purchases?.amount   || 0, color: "#16A34A", due: expenses.supply_purchases?.due || 0 },
+    // Mirrors the medicine bucket above — GeneralItemBatch has the same
+    // live (not snapshot) `quantity`, so its `due` figure carries the same caveat.
+    { label: "General Item Purchases", value: expenses.general_item_purchases?.amount || 0, color: "#F97316", due: expenses.general_item_purchases?.due || 0 },
   ];
   const gross = expenses.gross_total || buckets.reduce((s, b) => s + b.value, 0) || 1;
 
   return (
     <div style={cardStyle}>
       <p style={{ fontSize: "13px", fontWeight: 700, color: "#0F172A", margin: "0 0 4px" }}>Where the money is going</p>
-      <p style={{ fontSize: "11px", color: "#94A3B8", margin: "0 0 16px" }}>Breakdown of the {fmt(gross)} Total Expenses above — see Profit card for the figure after refunds</p>
+      <p style={{ fontSize: "11px", color: "#94A3B8", margin: "0 0 16px" }}>Breakdown of the {fmt(gross)} Total Expenses above (full invoice value on receipt) — see Profit card for the figure after refunds</p>
       {buckets.map(b => {
         const pct = gross > 0 ? (b.value / gross) * 100 : 0;
         return (
@@ -86,6 +96,11 @@ function ExpenseBreakdown({ expenses, navigate }) {
             <div style={{ height: "8px", background: "#F1F5F9", borderRadius: "4px", overflow: "hidden" }}>
               <div style={{ height: "100%", width: `${pct}%`, background: b.color, borderRadius: "4px", transition: "width 0.5s" }} />
             </div>
+            {b.due > 0 && (
+              <p style={{ fontSize: "11px", color: "#D97706", fontWeight: 600, margin: "4px 0 0" }}>
+                {fmt(b.due)} still due to dealers — see Dealers page
+              </p>
+            )}
           </div>
         );
       })}
@@ -235,27 +250,117 @@ function RevenueSplit({ revenue }) {
     { key: "pharmacy",     label: "Pharmacy",      icon: "💊", color: "#16A34A" },
     { key: "laboratory",   label: "Laboratory",    icon: "🔬", color: "#F59E0B" },
   ];
+  const homeVisit = revenue.home_visit || { amount: 0, count: 0 };
   return (
     <div style={cardStyle}>
       <p style={{ fontSize: "13px", fontWeight: 700, color: "#0F172A", margin: "0 0 14px" }}>Revenue Split</p>
       {items.map(it => {
         const d = revenue[it.key] || { amount: 0, count: 0 };
         return (
-          <div key={it.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: "10px", background: `${it.color}0C`, marginBottom: "8px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span style={{ fontSize: "16px" }}>{it.icon}</span>
-              <div>
-                <p style={{ fontSize: "12.5px", fontWeight: 700, color: "#0F172A", margin: 0 }}>{it.label}</p>
-                <p style={{ fontSize: "11px", color: "#94A3B8", margin: "1px 0 0" }}>
-                  {d.count} bill{d.count === 1 ? "" : "s"}
-                  {it.key === "laboratory" && <span style={{ marginLeft: "5px", color: "#CBD5E1" }}>(not included in total)</span>}
-                </p>
+          <div key={it.key} style={{ padding: "10px 12px", borderRadius: "10px", background: `${it.color}0C`, marginBottom: "8px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "16px" }}>{it.icon}</span>
+                <div>
+                  <p style={{ fontSize: "12.5px", fontWeight: 700, color: "#0F172A", margin: 0 }}>{it.label}</p>
+                  <p style={{ fontSize: "11px", color: "#94A3B8", margin: "1px 0 0" }}>
+                    {d.count} bill{d.count === 1 ? "" : "s"}
+                    {it.key === "laboratory" && <span style={{ marginLeft: "5px", color: "#CBD5E1" }}>(not included in total)</span>}
+                  </p>
+                </div>
               </div>
+              <span style={{ fontSize: "13.5px", fontWeight: 800, color: it.color }}>{fmt(d.amount)}</span>
             </div>
-            <span style={{ fontSize: "13.5px", fontWeight: 800, color: it.color }}>{fmt(d.amount)}</span>
+            {/* Home Visit is a subset of Consultation, informational only — not additive */}
+            {it.key === "consultation" && homeVisit.amount > 0 && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px", paddingTop: "8px", borderTop: `1px dashed ${it.color}33` }}>
+                <span style={{ fontSize: "11px", color: "#64748B" }}>
+                  🏠 of which Home Visit ({homeVisit.count} bill{homeVisit.count === 1 ? "" : "s"})
+                </span>
+                <span style={{ fontSize: "11.5px", fontWeight: 700, color: "#64748B" }}>{fmt(homeVisit.amount)}</span>
+              </div>
+            )}
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════
+// Home Visit Fee Settings — GET/PATCH /manager/home-visit-settings/
+// ════════════════════════════════════════════════════════
+function HomeVisitSettingsCard() {
+  const [fee, setFee]         = useState("");
+  const [travel, setTravel]   = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving]   = useState(false);
+  const [error, setError]     = useState(null);
+  const [saved, setSaved]     = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true); setError(null);
+    try {
+      const res = await getHomeVisitSettings();
+      setFee(String(res.default_home_visit_fee ?? ""));
+      setTravel(String(res.default_home_visit_travel_charge ?? ""));
+    } catch { setError("Failed to load settings."); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSave = async () => {
+    setSaving(true); setError(null); setSaved(false);
+    try {
+      const res = await patchHomeVisitSettings({
+        default_home_visit_fee: parseFloat(fee) || 0,
+        default_home_visit_travel_charge: parseFloat(travel) || 0,
+      });
+      setFee(String(res.default_home_visit_fee ?? ""));
+      setTravel(String(res.default_home_visit_travel_charge ?? ""));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      const d = e?.response?.data;
+      setError((d && (d.default_home_visit_fee || d.default_home_visit_travel_charge)) || "Failed to save settings.");
+    } finally { setSaving(false); }
+  };
+
+  const fieldInp = {
+    width: "100%", padding: "9px 12px", borderRadius: "8px",
+    border: "1px solid #E2E8F0", fontSize: "13px", color: "#1E293B",
+    outline: "none", boxSizing: "border-box", background: "#F8FAFC",
+  };
+
+  return (
+    <div style={cardStyle}>
+      <p style={{ fontSize: "13px", fontWeight: 700, color: "#0F172A", margin: "0 0 4px" }}>🏠 Home Visit Fee Settings</p>
+      <p style={{ fontSize: "11px", color: "#94A3B8", margin: "0 0 16px" }}>Defaults pre-filled in Reception's billing screen when booking a Home Visit</p>
+      {loading ? (
+        <p style={{ fontSize: "12px", color: "#94A3B8", textAlign: "center", padding: "16px 0" }}>Loading…</p>
+      ) : (
+        <>
+          {error && <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", borderRadius: "8px", padding: "8px 12px", color: "#DC2626", fontSize: "12px", marginBottom: "12px" }}>{error}</div>}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "14px" }}>
+            <div>
+              <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "#374151", marginBottom: "5px" }}>Home Visit Fee (₹)</label>
+              <input type="number" min="0" step="0.01" value={fee} onChange={e => setFee(e.target.value)} style={fieldInp} />
+            </div>
+            <div>
+              <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "#374151", marginBottom: "5px" }}>Travel Charge (₹)</label>
+              <input type="number" min="0" step="0.01" value={travel} onChange={e => setTravel(e.target.value)} style={fieldInp} />
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <button onClick={handleSave} disabled={saving}
+              style={{ padding: "8px 18px", borderRadius: "9px", border: "none", background: ACCENT, color: "#fff", fontWeight: 700, fontSize: "12.5px", cursor: saving ? "not-allowed" : "pointer", opacity: saving ? 0.6 : 1 }}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+            {saved && <span style={{ fontSize: "12px", color: GREEN, fontWeight: 600 }}>✓ Saved</span>}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -372,6 +477,11 @@ export default function ManagerDashboardPage() {
               sub="incl. salary + purchases, before refunds"
             />
             <StatCard
+              title="Other Income" icon="📥" color={GREEN}
+              value={fmt(data.revenue?.other_income?.amount)}
+              sub={`${data.revenue?.other_income?.count || 0} entries${data.revenue?.other_income?.lab_commission > 0 ? ` · ${fmt(data.revenue.other_income.lab_commission)} lab commission` : ""}`}
+            />
+            <StatCard
               title="Refunds" icon="↩️" color={TEAL}
               value={fmt(data.refunds?.total)}
               sub="Medicine + Supply returns"
@@ -393,10 +503,11 @@ export default function ManagerDashboardPage() {
             <TrendChart trend={data.trend} />
           </div>
 
-          {/* 4. Two-column row: recent expenses + revenue split */}
+          {/* 4. Recent expenses + revenue split + home visit fee settings */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "14px", marginBottom: "20px" }}>
             <RecentExpenses expenses={data.expenses} navigate={navigate} />
             <RevenueSplit revenue={data.revenue} />
+            <HomeVisitSettingsCard />
           </div>
 
           {/* 5. Quick links */}

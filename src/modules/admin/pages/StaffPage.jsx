@@ -2,10 +2,11 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   getStaffList, createStaff, patchStaff,
-  deactivateStaff, reactivateStaff,
+  deactivateStaff, reactivateStaff, promoteToGroupAdmin,
 } from "../api/adminApi";
 import { Toast, useToast } from "../../../components/shared/Toast";
 import { isValidPhone, sanitizePhoneInput, PHONE_ERROR_MESSAGE } from "../../../utils/phoneValidation";
+import useBranchScope from "../hooks/useBranchScope";
 
 const G = "#16A34A";
 
@@ -77,6 +78,7 @@ const EMPTY_FORM = {
   role: "Doctor", phone: "", date_of_birth: "", address: "",
   qualification: "", salary: "25000", joining_date: new Date().toISOString().split("T")[0],
   salary_type: "Monthly", daily_rate: "", weekly_rate: "",
+  branch: "",
 };
 
 /* ── Modal ── */
@@ -100,6 +102,7 @@ const Modal = ({ title, onClose, children }) => (
 );
 
 export default function StaffPage() {
+  const { isGroupAdmin, branches, selectedBranch, listParams } = useBranchScope();
   const [staff, setStaff]           = useState([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState("");
@@ -123,8 +126,12 @@ export default function StaffPage() {
     if (showAll) url += "all=true&";
     if (roleFilter) url += `role=${encodeURIComponent(roleFilter)}&`;
     if (search) url += `search=${encodeURIComponent(search)}&`;
+    // Group admin narrowed the header switcher to one branch — otherwise
+    // omitted entirely so the backend returns the unfiltered cross-branch
+    // list (or, for a non-group-admin, silently ignores it either way).
+    if (listParams.branch) url += `branch=${encodeURIComponent(listParams.branch)}&`;
     return url;
-  }, [showAll, roleFilter, search]);
+  }, [showAll, roleFilter, search, listParams]);
 
   const loadStaff = useCallback((url) => {
     setLoading(true);
@@ -151,7 +158,18 @@ export default function StaffPage() {
       || s.user?.email?.toLowerCase().includes(q) || s.staff_code?.toLowerCase().includes(q);
   });
 
-  const openAdd = () => { setForm(EMPTY_FORM); setFormError(""); setModal("add"); };
+  const openAdd = () => {
+    // If the group admin has narrowed the header switcher to one branch,
+    // the Add form should default into that branch too — otherwise the
+    // branch dropdown starts blank and lets them create staff under any
+    // branch regardless of what they're currently viewing, which is what
+    // was actually happening (Madathara selected up top, staff still
+    // created under Trivandrum because the form never looked at
+    // selectedBranch at all).
+    setForm({ ...EMPTY_FORM, branch: selectedBranch ?? "" });
+    setFormError("");
+    setModal("add");
+  };
   const openEdit = (s) => {
     setEditTarget(s);
     setForm({
@@ -165,9 +183,27 @@ export default function StaffPage() {
       salary: s.salary ?? "", joining_date: s.joining_date ?? "",
       salary_type: s.salary_type ?? "Monthly",
       daily_rate: s.daily_rate ?? "", weekly_rate: s.weekly_rate ?? "",
+      branch: s.branch ?? "",
     });
     setFormError("");
     setModal("edit");
+  };
+
+  // Visible only to existing group admins (spec §2.7) — promotes another
+  // admin-role staff member to group admin via the dedicated endpoint.
+  // Deliberately NOT done via a plain PATCH: is_group_admin is read-only
+  // on StaffProfileSerializer for exactly this reason (see backend note),
+  // so this is the only way to grant it.
+  const handlePromote = async (s) => {
+    if (!window.confirm(`Promote ${s.user?.first_name} ${s.user?.last_name} to Group Admin? This grants access across all branches.`)) return;
+    try {
+      await promoteToGroupAdmin(s.id);
+      showToast("Promoted to Group Admin.");
+      loadStaff(currentUrl ?? buildUrl());
+    } catch (err) {
+      const msg = err?.response?.data?.error || err?.response?.data?.detail || "Failed to promote staff member.";
+      showToast(msg, false);
+    }
   };
 
   const handleFormChange = (field, value) => setForm(f => ({ ...f, [field]: value }));
@@ -205,6 +241,15 @@ export default function StaffPage() {
       if (payload.role !== "Lab Technician") {
         payload.daily_rate  = payload.daily_rate === ""  ? "0.00" : payload.daily_rate;
         payload.weekly_rate = payload.weekly_rate === "" ? "0.00" : payload.weekly_rate;
+      }
+
+      // Branch is only ever picked explicitly by a group admin — a
+      // branch-scoped admin's staff always belongs to their own branch,
+      // resolved automatically server-side, so don't even send the field.
+      if (!isGroupAdmin || !payload.branch) {
+        delete payload.branch;
+      } else {
+        payload.branch = Number(payload.branch);
       }
 
       if (modal === "add") {
@@ -313,7 +358,11 @@ export default function StaffPage() {
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead style={{ background: "#F8FAFC" }}>
               <tr>
-                {["Staff Code", "Name", "Role", "Phone", "Email", "Joined", "Status", "Actions"].map(h => (
+                {[
+                  "Staff Code", "Name", "Role",
+                  ...(isGroupAdmin ? ["Branch"] : []),
+                  "Phone", "Email", "Joined", "Status", "Actions",
+                ].map(h => (
                   <th key={h} style={{ padding: "11px 14px", textAlign: "left", fontSize: "11px", fontWeight: 600, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.5px", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
@@ -322,7 +371,7 @@ export default function StaffPage() {
               {loading ? (
                 Array.from({ length: 6 }).map((_, i) => (
                   <tr key={i} style={{ borderTop: "1px solid #F8FAFC" }}>
-                    {Array.from({ length: 8 }).map((_, j) => (
+                    {Array.from({ length: isGroupAdmin ? 9 : 8 }).map((_, j) => (
                       <td key={j} style={{ padding: "14px" }}>
                         <div style={{ height: "14px", borderRadius: "4px", background: "#F1F5F9", animation: "pulse 1.5s infinite" }} />
                       </td>
@@ -331,7 +380,7 @@ export default function StaffPage() {
                 ))
               ) : displayed.length === 0 ? (
                 <tr>
-                  <td colSpan={8} style={{ padding: "48px", textAlign: "center", color: "#94A3B8", fontSize: "14px" }}>
+                  <td colSpan={isGroupAdmin ? 9 : 8} style={{ padding: "48px", textAlign: "center", color: "#94A3B8", fontSize: "14px" }}>
                     <Ico path={ICONS.user} size={36} color="#CBD5E1" /><br />
                     <span style={{ marginTop: "8px", display: "block" }}>No staff found.</span>
                   </td>
@@ -367,6 +416,14 @@ export default function StaffPage() {
                       </div>
                     </td>
                     <td style={{ padding: "12px 14px" }}><RoleBadge role={s.role} /></td>
+                    {isGroupAdmin && (
+                      <td style={{ padding: "12px 14px", fontSize: "12px", color: "#475569", whiteSpace: "nowrap" }}>
+                        {(() => {
+                          const b = branches.find(b => b.branch_id === s.branch);
+                          return b ? `${b.name} (${b.code})` : "—";
+                        })()}
+                      </td>
+                    )}
                     <td style={{ padding: "12px 14px", fontSize: "13px", color: "#475569" }}>{s.phone ?? "—"}</td>
                     <td style={{ padding: "12px 14px", fontSize: "13px", color: "#475569" }}>{s.user?.email ?? "—"}</td>
                     <td style={{ padding: "12px 14px", fontSize: "12px", color: "#94A3B8", whiteSpace: "nowrap" }}>
@@ -384,6 +441,19 @@ export default function StaffPage() {
                           style={{ background: s.is_active ? "#FEF2F2" : "#F0FDF4", border: "none", borderRadius: "7px", padding: "6px", cursor: "pointer", display: "flex" }}>
                           <Ico path={s.is_active ? ICONS.deact : ICONS.react} size={14} color={s.is_active ? "#EF4444" : G} />
                         </button>
+                        {isGroupAdmin && s.role === "Admin" && !s.is_group_admin && (
+                          <button onClick={() => handlePromote(s)}
+                            title="Promote to Group Admin"
+                            style={{ background: "#FCE7F3", border: "none", borderRadius: "7px", padding: "6px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: "5px", fontSize: "11px", fontWeight: 600, color: "#BE185D" }}>
+                            <Ico path="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.7 6.9L12 17.3 5.7 20.8l1.7-6.9L2 9.2l7.1-.6z" size={12} color="#BE185D" />
+                            Make Group Admin
+                          </button>
+                        )}
+                        {s.is_group_admin && (
+                          <span title="Group Admin" style={{ fontSize: "11px", fontWeight: 600, color: "#BE185D", padding: "6px 8px" }}>
+                            ★ Group Admin
+                          </span>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -443,6 +513,27 @@ export default function StaffPage() {
                 {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
               </select>
             </Field>
+            {isGroupAdmin && (
+              <Field label="Branch" required>
+                {modal === "add" && selectedBranch ? (
+                  // A specific branch is narrowed in the header switcher —
+                  // lock the new staff member to that branch instead of
+                  // offering a free choice, so "viewing Madathara" can't
+                  // silently create staff under Trivandrum. Switch branches
+                  // via the header switcher first to add staff elsewhere.
+                  <div style={{ ...inp, display: "flex", alignItems: "center", justifyContent: "space-between", background: "#F8FAFC", color: "#475569" }}>
+                    <span>{branches.find(b => b.branch_id === selectedBranch)?.name ?? "Selected branch"}</span>
+                    <span style={{ fontSize: "11px", color: "#94A3B8" }}>locked to header selection</span>
+                  </div>
+                ) : (
+                  <select style={{ ...inp, cursor: "pointer" }} value={form.branch}
+                    onChange={e => handleFormChange("branch", e.target.value)}>
+                    <option value="">— Select a branch —</option>
+                    {branches.map(b => <option key={b.branch_id} value={b.branch_id}>{b.name} ({b.code})</option>)}
+                  </select>
+                )}
+              </Field>
+            )}
             <Field label="Phone">
               <input style={inp} value={form.phone} maxLength={10} inputMode="numeric"
                 onChange={e => handleFormChange("phone", sanitizePhoneInput(e.target.value))} placeholder="Starts with 6-9, 10 digits" />

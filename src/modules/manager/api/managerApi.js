@@ -1,6 +1,15 @@
 // src/modules/manager/api/managerApi.js
 import API from "../../../api";
 
+// ─── BRANCH ACCESS (self-service) ──────────────────────────────────────────
+// A manager's own accessible branches (home branch + anything a group admin
+// granted via ManagerBranchAccess). Powers BranchSwitcher.jsx for the
+// manager role. See manager/views.py:ManagerBranchesView.
+export const getManagerBranches = async () => {
+  const res = await API.get("/manager/branches/");
+  return res.data; // { branches: [...], active_branch_id }
+};
+
 // ─── FINANCE DASHBOARD ────────────────────────────────────────────────────
 export const getFinanceDashboard = async (params = {}) => {
   const res = await API.get("/manager/finance/", { params });
@@ -175,6 +184,39 @@ export const patchExpense = async (id, payload) => {
 
 export const deleteExpense = async (id) => {
   const res = await API.delete(`/manager/expenses/${id}/`);
+  return res.data;
+};
+
+// ─── OTHER INCOME ─────────────────────────────────────────────────────────
+export const listIncome = async (params = {}) => {
+  const res = await API.get("/manager/income/", { params });
+  return res.data;
+};
+
+export const createIncome = async (payload) => {
+  const res = await API.post("/manager/income/", payload);
+  return res.data;
+};
+
+export const patchIncome = async (id, payload) => {
+  const res = await API.patch(`/manager/income/${id}/`, payload);
+  return res.data;
+};
+
+export const deleteIncome = async (id) => {
+  const res = await API.delete(`/manager/income/${id}/`);
+  return res.data;
+};
+
+// ─── HOME VISIT FEE SETTINGS ────────────────────────────────────────────────
+// GET readable by receptionist/manager/admin, PATCH manager/admin only.
+export const getHomeVisitSettings = async () => {
+  const res = await API.get("/manager/home-visit-settings/");
+  return res.data;
+};
+
+export const patchHomeVisitSettings = async (payload) => {
+  const res = await API.patch("/manager/home-visit-settings/", payload);
   return res.data;
 };
 

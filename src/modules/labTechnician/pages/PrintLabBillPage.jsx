@@ -3,6 +3,7 @@ import { useEffect, useState, Fragment } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { getLabBillDetail, getLabRequestDetail } from "../api/labApi";
 import { groupLabRequestItems } from "../../../utils/labItemGrouping";
+import { flattenFormError } from "../../../utils/formErrors";
 
 const AMBER = "#F59E0B";
 
@@ -36,7 +37,7 @@ export default function PrintLabBillPage() {
           if (!cancelled) setLabRequest(requestData);
         }
       } catch (e) {
-        if (!cancelled) setError(String(e));
+        if (!cancelled) setError(flattenFormError(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -45,6 +46,11 @@ export default function PrintLabBillPage() {
   }, [billId]);
 
   const handlePrint = () => window.print();
+
+  // This page is always opened via target="_blank" from the Lab Bills
+  // list, so it's a brand-new tab with no history to pop — navigate(-1)
+  // would silently do nothing there. Go to the bills list explicitly.
+  const handleBack = () => navigate("/lab/bills");
 
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh" }}>
@@ -57,7 +63,7 @@ export default function PrintLabBillPage() {
     <div style={{ padding: 40, textAlign: "center", color: "#EF4444", fontFamily: "'Inter',sans-serif" }}>
       <p style={{ fontSize: 15, fontWeight: 600 }}>Failed to load bill.</p>
       <p style={{ fontSize: 13, color: "#94A3B8" }}>{error}</p>
-      <button onClick={() => navigate(-1)} style={{ marginTop: 16, padding: "8px 18px", borderRadius: 8, border: "1.5px solid #E2E8F0", background: "#fff", cursor: "pointer", fontSize: 13 }}>
+      <button onClick={() => navigate("/lab/bills")} style={{ marginTop: 16, padding: "8px 18px", borderRadius: 8, border: "1.5px solid #E2E8F0", background: "#fff", cursor: "pointer", fontSize: 13 }}>
         Go back
       </button>
     </div>
@@ -81,7 +87,7 @@ export default function PrintLabBillPage() {
 
       {/* Screen-only toolbar */}
       <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <button onClick={() => navigate(-1)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "1.5px solid #E2E8F0", background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#64748B" }}>
+        <button onClick={handleBack} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "1.5px solid #E2E8F0", background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#64748B" }}>
           <Ico d={ICONS.back} size={14} /> Back
         </button>
         <button onClick={handlePrint} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 18px", borderRadius: 8, border: "none", background: AMBER, color: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>
@@ -102,9 +108,7 @@ export default function PrintLabBillPage() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px", marginBottom: 20, fontSize: 13 }}>
           {[
             ["Bill No.",     bill.bill_number],
-            ["Date",         date],
             ["Patient",      patientName + (isWalkin ? " (Walk-in)" : "")],
-            ["MRD / Phone",  patientMrd || patientPhone || "—"],
             ["Payment",      bill.payment_method && bill.payment_method !== "NONE" ? bill.payment_method : "—"],
             ["Paid at",      bill.payment_status === "PAID" ? paidAt : "—"],
           ].map(([label, value]) => (

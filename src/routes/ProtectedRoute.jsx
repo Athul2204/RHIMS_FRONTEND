@@ -10,12 +10,10 @@ import { useAuth } from "../context/AuthContext";
  *  - allowedRoles  string[]  — if provided, only these roles may access the route
  *  - children      ReactNode — the page/layout to render when access is granted
  *
- * FIX 1: Changed `loading` → `bootLoading`.
- * AuthContext never exported `loading`; it exports `bootLoading` (initial
- * session check) and `authLoading` (login/logout in progress). Using the
- * wrong name meant the guard was always undefined/falsy, so the route
- * evaluated auth state before the /auth/me/ boot check finished — causing
- * an instant redirect to /login even for users with valid cookies.
+ * Blocks on bootLoading (initial /auth/me/ check, plus — for admins — the
+ * branch-context probe in AuthContext) so the app never flashes a login
+ * redirect for a user with a valid session, and an admin's dashboard never
+ * renders half a beat before it knows whether to show a branch switcher.
  */
 const ProtectedRoute = ({ children, allowedRoles }) => {
   const { user, bootLoading } = useAuth();

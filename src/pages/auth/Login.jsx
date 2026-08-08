@@ -59,7 +59,15 @@ export default function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!form.username || !form.password) {
+    // Username is case- and whitespace-insensitive (mirrors the backend
+    // check in CustomTokenObtainPairSerializer.validate) — trim here so the
+    // user never gets a confusing "invalid credentials" just because
+    // autocomplete/autocapitalize left a stray leading/trailing space.
+    // This is UX only, not the security boundary: the backend re-trims and
+    // re-normalizes the username itself regardless of what a client sends.
+    const normalizedUsername = form.username.trim();
+
+    if (!normalizedUsername || !form.password) {
       setError("Please fill in all fields.");
       return;
     }
@@ -67,7 +75,7 @@ export default function Login() {
     setLoading(true);
 
     try {
-      await login(form);
+      await login({ ...form, username: normalizedUsername });
     } catch (err) {
       setError(
         typeof err === "string"
@@ -217,6 +225,9 @@ export default function Login() {
                 value={form.username}
                 onChange={handleChange}
                 autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck="false"
                 placeholder="Enter your username"
                 className="w-full h-14 sm:h-16 rounded-full border border-slate-200 bg-slate-50 px-6 text-sm text-slate-700 outline-none transition-all duration-200 focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
               />
@@ -246,6 +257,9 @@ export default function Login() {
                   value={form.password}
                   onChange={handleChange}
                   autoComplete="current-password"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck="false"
                   placeholder="Enter your password"
                   className="w-full h-14 sm:h-16 rounded-full border border-slate-200 bg-slate-50 px-6 pr-14 text-sm text-slate-700 outline-none transition-all duration-200 focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100"
                 />

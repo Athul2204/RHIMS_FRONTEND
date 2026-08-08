@@ -5,6 +5,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
+import { flattenFormError } from "../../../utils/formErrors";
 import { 
   getConsultationsWithRx, 
   createBill 
@@ -379,7 +380,7 @@ export default function PrescriptionsPage() {
       setConsultations(list);
     } catch (e) {
       console.error("Error loading consultations:", e);
-      showToast(String(e), false);
+      showToast(flattenFormError(e), false);
     } finally {
       setLoading(false);
     }
@@ -413,7 +414,7 @@ export default function PrescriptionsPage() {
       }, 600);
 
     } catch (e) {
-      const msg = String(e);
+      const msg = flattenFormError(e);
       if (msg.includes("already exists") || msg.includes("409")) {
         showToast("Bill already exists for this prescription", true);
         setTimeout(() => {

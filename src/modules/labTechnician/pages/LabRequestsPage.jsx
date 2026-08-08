@@ -75,6 +75,20 @@ function StatusBadge({ status }) {
   );
 }
 
+// Parses a "70-100" / "70 - 100" / "70 to 100" style normal range string
+// into { min, max } numbers. Returns null for ranges that aren't a plain
+// numeric band (e.g. "Negative", "<5", free text) since those can't be
+// auto-compared against a result value.
+function parseNormalRange(range) {
+  if (!range) return null;
+  const match = String(range).match(/(-?\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(-?\d+(?:\.\d+)?)/i);
+  if (!match) return null;
+  const min = parseFloat(match[1]);
+  const max = parseFloat(match[2]);
+  if (isNaN(min) || isNaN(max)) return null;
+  return { min, max };
+}
+
 /* ─── Enter / Edit Result Modal ────────────────── */
 function EnterResultModal({ item, onClose, onSaved }) {
   const isEdit = !!item?.result;
@@ -85,13 +99,33 @@ function EnterResultModal({ item, onClose, onSaved }) {
     is_abnormal:  item?.result?.is_abnormal  ?? false,
     remarks:      item?.result?.remarks      ?? "",
   });
+  const [autoFlagged, setAutoFlagged] = useState(false);
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
   const [toast,  setToast]  = useState(null);
 
   if (!item) return null;
 
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  // Plain field updates. Changing the result value also auto-checks/
+  // unchecks "Abnormal" whenever the value is a plain number and the
+  // normal range is a comparable "min-max" band — the technician can
+  // still override the checkbox by hand afterwards.
+  const set = (k, v) => {
+    setForm((f) => {
+      const next = { ...f, [k]: v };
+      if (k === "result_value") {
+        const range = parseNormalRange(f.normal_range);
+        const num = parseFloat(v);
+        if (range && v.trim() !== "" && !isNaN(num)) {
+          next.is_abnormal = num < range.min || num > range.max;
+          setAutoFlagged(true);
+        } else {
+          setAutoFlagged(false);
+        }
+      }
+      return next;
+    });
+  };
 
   const validate = () => {
     const errs = {};
@@ -191,34 +225,39 @@ function EnterResultModal({ item, onClose, onSaved }) {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
           <div>
             <label style={{ display: "block", fontSize: "12px", fontWeight: 600, color: "#64748B", marginBottom: "6px" }}>
-              Normal Range
+              Normal Range <span style={{ fontWeight: 400, color: "#94A3B8" }}>(reference)</span>
             </label>
-            <input
-              type="text"
-              value={form.normal_range}
-              onChange={(e) => set("normal_range", e.target.value)}
-              placeholder="e.g., 70-100"
+            <div
               style={{
                 width: "100%",
                 padding: "9px 12px",
                 borderRadius: "8px",
                 border: "1.5px solid #E8EDF4",
+                background: "#F8FAFC",
                 fontSize: "13px",
+                color: form.normal_range ? "#475569" : "#94A3B8",
                 boxSizing: "border-box",
               }}
-            />
+            >
+              {form.normal_range || "Not defined for this test"}
+            </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <input
               type="checkbox"
               checked={form.is_abnormal}
-              onChange={(e) => set("is_abnormal", e.target.checked)}
+              onChange={(e) => { setAutoFlagged(false); set("is_abnormal", e.target.checked); }}
               id="abnormal"
               style={{ cursor: "pointer" }}
             />
             <label htmlFor="abnormal" style={{ fontSize: "12px", fontWeight: 600, color: "#64748B", cursor: "pointer", margin: 0 }}>
               Abnormal
             </label>
+            {autoFlagged && form.is_abnormal && (
+              <span style={{ fontSize: "10px", fontWeight: 600, color: "#DC2626", background: "#FEF2F2", padding: "2px 6px", borderRadius: "10px" }}>
+                Auto — out of range
+              </span>
+            )}
           </div>
         </div>
 
@@ -652,6 +691,7 @@ function RequestDetailModal({ requestId, onClose, onUpdated }) {
   const [resultItem, setResultItem] = useState(null); // item currently being edited
   const [claiming, setClaiming] = useState(false);
   const [claimError, setClaimError] = useState(null);
+  const [notesMessage, setNotesMessage] = useState(null); // { ok: bool, msg: string }
 
   const fetchDetails = useCallback(async () => {
     try {
@@ -760,12 +800,15 @@ function RequestDetailModal({ requestId, onClose, onUpdated }) {
 
   const handleSaveReportNotes = async () => {
     if (!report) return;
+    setNotesMessage(null);
     try {
       await updateLabReport(requestId, { report_notes: reportNotes });
       setReport((prev) => ({ ...prev, report_notes: reportNotes }));
-      alert("Notes saved successfully");
+      setNotesMessage({ ok: true, msg: "Notes saved successfully." });
     } catch (err) {
-      alert("Error: " + (err.response?.data?.detail || err.message));
+      setNotesMessage({ ok: false, msg: "Error: " + (err.response?.data?.detail || err.message) });
+    } finally {
+      setTimeout(() => setNotesMessage(null), 3200);
     }
   };
 
@@ -1060,6 +1103,21 @@ function RequestDetailModal({ requestId, onClose, onUpdated }) {
             >
               Save Notes
             </button>
+            {notesMessage && (
+              <div
+                style={{
+                  marginTop: "10px",
+                  padding: "8px 12px",
+                  borderRadius: "8px",
+                  fontSize: "12.5px",
+                  fontWeight: 600,
+                  background: notesMessage.ok ? "#D1FAE5" : "#FEE2E2",
+                  color:      notesMessage.ok ? "#059669" : "#DC2626",
+                }}
+              >
+                {notesMessage.msg}
+              </div>
+            )}
           </div>
         )}
 
@@ -1141,6 +1199,7 @@ function RequestDetailModal({ requestId, onClose, onUpdated }) {
 
 function ClaimCell({ req, onClaimed }) {
   const [claiming, setClaiming] = useState(false);
+  const [error, setError] = useState(null);
 
   if (req.is_claimed) {
     return (
@@ -1165,34 +1224,59 @@ function ClaimCell({ req, onClaimed }) {
     e.stopPropagation();
     if (claiming) return;
     setClaiming(true);
+    setError(null);
     try {
       await claimLabRequest(req.request_id);
       onClaimed?.();
     } catch (err) {
-      alert(err.response?.data?.error || err.response?.data?.detail || err.message);
+      setError(err.response?.data?.error || err.response?.data?.detail || err.message);
+      setTimeout(() => setError(null), 4000);
     } finally {
       setClaiming(false);
     }
   };
 
   return (
-    <button
-      onClick={handleClaim}
-      disabled={claiming}
-      style={{
-        padding: "4px 10px",
-        borderRadius: "6px",
-        border: "1px solid #FDE68A",
-        background: claiming ? "#F1F5F9" : "#FFFBEB",
-        color: claiming ? "#94A3B8" : "#D97706",
-        fontSize: "11px",
-        fontWeight: 700,
-        cursor: claiming ? "not-allowed" : "pointer",
-        whiteSpace: "nowrap",
-      }}
-    >
-      {claiming ? "Claiming…" : "Claim"}
-    </button>
+    <span style={{ position: "relative", display: "inline-block" }}>
+      <button
+        onClick={handleClaim}
+        disabled={claiming}
+        style={{
+          padding: "4px 10px",
+          borderRadius: "6px",
+          border: "1px solid #FDE68A",
+          background: claiming ? "#F1F5F9" : "#FFFBEB",
+          color: claiming ? "#94A3B8" : "#D97706",
+          fontSize: "11px",
+          fontWeight: 700,
+          cursor: claiming ? "not-allowed" : "pointer",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {claiming ? "Claiming…" : "Claim"}
+      </button>
+      {error && (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 0,
+            zIndex: 20,
+            background: "#FEE2E2",
+            color: "#DC2626",
+            border: "1px solid #FECACA",
+            borderRadius: "8px",
+            padding: "6px 10px",
+            fontSize: "11px",
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+            boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+          }}
+        >
+          {error}
+        </div>
+      )}
+    </span>
   );
 }
 

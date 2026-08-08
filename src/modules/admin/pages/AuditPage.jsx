@@ -1,6 +1,7 @@
 // src/modules/admin/pages/AuditPage.jsx
 import { useEffect, useState, useCallback } from "react";
 import { getAuditLogs } from "../api/adminApi";
+import useBranchScope from "../hooks/useBranchScope";
 
 const G = "#16A34A";
 
@@ -58,13 +59,35 @@ const PAGE_SIZE = 20;
 const ALL_ACTIONS = ["", "CREATE", "UPDATE", "DELETE", "LOGIN", "LOGOUT", "DEACTIVATE", "REACTIVATE", "VIEW", "EXPORT"];
 const ALL_MODULES = ["", "authentication", "staff", "patients", "appointments", "pharmacy", "lab", "billing", "administration"];
 
+// Pulls the DRF `?page=` number back out of whatever URL was actually
+// fetched (the base path has none → page 1; a next/previous URL always
+// carries its own). Reading it off the fetched URL itself — rather than
+// trusting a separately-tracked "current page" variable — means the row
+// numbering below can never drift out of sync with what's on screen.
+const parsePageFromUrl = (url) => {
+  try {
+    const u = new URL(url, window.location.origin);
+    const n = parseInt(u.searchParams.get("page"), 10);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  } catch {
+    return 1;
+  }
+};
+
 export default function AuditPage() {
+  const { isGroupAdmin, listParams } = useBranchScope();
   const [logs, setLogs]         = useState([]);
   const [count, setCount]       = useState(0);
   const [nextUrl, setNextUrl]   = useState(null);
   const [prevUrl, setPrevUrl]   = useState(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState("");
+  // Which page is currently on screen, so the "#" column can show a real
+  // running serial number instead of the raw AuditLog primary key (which
+  // jumps around once you're filtered/branch-scoped/paginated, since it's
+  // a global id shared with every other branch's and module's log rows —
+  // that's what was showing up as "random" numbers).
+  const [page, setPage]         = useState(1);
 
   /* filters */
   const [search, setSearch]     = useState("");
@@ -86,6 +109,13 @@ export default function AuditPage() {
       if (module)   p.set("module", module);
       if (dateFrom) p.set("timestamp_after", dateFrom);
       if (dateTo)   p.set("timestamp_before", dateTo + "T23:59:59");
+      if (listParams.branch) p.set("branch", listParams.branch);
+      // Explicit page_size so it always matches PAGE_SIZE, which is what
+      // the "#" column below uses to compute each row's offset — without
+      // this the backend defaults to its own page size (10), and rows
+      // after page 1 would be numbered assuming 20-per-page while only 10
+      // actually came back.
+      p.set("page_size", String(PAGE_SIZE));
       const qs = p.toString();
       target = qs ? `${url}?${qs}` : url;
     }
@@ -96,14 +126,15 @@ export default function AuditPage() {
         setCount(data?.count ?? rows.length);
         setNextUrl(data?.next ?? null);
         setPrevUrl(data?.previous ?? null);
+        setPage(parsePageFromUrl(target));
       })
       .catch(() => setError("Failed to load audit logs. Please try again."))
       .finally(() => setLoading(false));
-  }, [search, action, module, dateFrom, dateTo]);
+  }, [search, action, module, dateFrom, dateTo, listParams]);
 
   useEffect(() => {
     load("/administration/audit/");
-  }, []);  
+  }, [load]);
 
   const applyFilters = () => {
     setCurrentUrl("/administration/audit/");
@@ -113,11 +144,16 @@ export default function AuditPage() {
   const resetFilters = () => {
     setSearch(""); setAction(""); setModule(""); setDateFrom(""); setDateTo("");
     setCurrentUrl("/administration/audit/");
-    getAuditLogs("/administration/audit/")
+    const p = new URLSearchParams();
+    if (listParams.branch) p.set("branch", listParams.branch);
+    p.set("page_size", String(PAGE_SIZE));
+    const target = `/administration/audit/?${p.toString()}`;
+    getAuditLogs(target)
       .then(data => {
         const rows = Array.isArray(data) ? data : (data?.results ?? []);
         setLogs(rows); setCount(data?.count ?? rows.length);
         setNextUrl(data?.next ?? null); setPrevUrl(data?.previous ?? null);
+        setPage(1);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -134,10 +170,15 @@ export default function AuditPage() {
   /* Export CSV */
   const exportCSV = () => {
     if (!logs.length) return;
-    const header = ["Log ID", "User", "Module", "Action", "Description", "IP Address", "Timestamp"];
+    const header = [
+      "Log ID", "User",
+      ...(isGroupAdmin ? ["Branch"] : []),
+      "Module", "Action", "Description", "IP Address", "Timestamp",
+    ];
     const rows = logs.map(l => [
       l.log_id ?? l.id ?? "",
       l.username ?? "",
+      ...(isGroupAdmin ? [l.branch_name ? `${l.branch_name} (${l.branch_code})` : ""] : []),
       l.module ?? "",
       l.action ?? "",
       `"${(l.description ?? "").replace(/"/g, '""')}"`,
@@ -262,7 +303,11 @@ export default function AuditPage() {
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "700px" }}>
             <thead>
               <tr style={{ borderBottom: "2px solid #F1F5F9", background: "#FAFBFD" }}>
-                {["#", "User", "Module", "Action", "Description", "IP Address", "Timestamp"].map(h => (
+                {[
+                  "#", "User",
+                  ...(isGroupAdmin ? ["Branch"] : []),
+                  "Module", "Action", "Description", "IP Address", "Timestamp",
+                ].map(h => (
                   <th key={h} style={{ padding: "11px 16px", textAlign: "left", fontSize: "11px", fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.6px", whiteSpace: "nowrap" }}>{h}</th>
                 ))}
               </tr>
@@ -271,14 +316,14 @@ export default function AuditPage() {
               {loading ? (
                 Array.from({ length: 10 }).map((_, i) => (
                   <tr key={i} style={{ borderBottom: "1px solid #F8FAFC" }}>
-                    {[40, 130, 100, 90, 220, 100, 110].map((w, j) => (
+                    {(isGroupAdmin ? [40, 130, 90, 100, 90, 220, 100, 110] : [40, 130, 100, 90, 220, 100, 110]).map((w, j) => (
                       <td key={j} style={{ padding: "13px 16px" }}><Skeleton h={12} w={`${w}px`} /></td>
                     ))}
                   </tr>
                 ))
               ) : logs.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: "60px 20px", textAlign: "center" }}>
+                  <td colSpan={isGroupAdmin ? 8 : 7} style={{ padding: "60px 20px", textAlign: "center" }}>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "10px" }}>
                       <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#F1F5F9", display: "flex", alignItems: "center", justifyContent: "center" }}>
                         <Ico path={ICONS.shield} size={22} color="#CBD5E1" />
@@ -289,7 +334,9 @@ export default function AuditPage() {
                   </td>
                 </tr>
               ) : (
-                logs.map((log, i) => (
+                logs.map((log, i) => {
+                  const serial = count - ((page - 1) * PAGE_SIZE + i);
+                  return (
                   <tr
                     key={log.log_id ?? log.id ?? i}
                     style={{ borderBottom: "1px solid #F8FAFC", transition: "background 0.1s" }}
@@ -298,7 +345,7 @@ export default function AuditPage() {
                   >
                     {/* # */}
                     <td style={{ padding: "12px 16px", fontSize: "12px", color: "#CBD5E1", fontFamily: "monospace" }}>
-                      {log.log_id ?? log.id ?? "—"}
+                      {log.serial_number ?? serial}
                     </td>
                     {/* User */}
                     <td style={{ padding: "12px 16px" }}>
@@ -316,6 +363,12 @@ export default function AuditPage() {
                         </div>
                       </div>
                     </td>
+                    {/* Branch (group admin only — backend already includes branch_name/branch_code) */}
+                    {isGroupAdmin && (
+                      <td style={{ padding: "12px 16px", fontSize: "12px", color: "#475569", whiteSpace: "nowrap" }}>
+                        {log.branch_name ? `${log.branch_name} (${log.branch_code})` : "—"}
+                      </td>
+                    )}
                     {/* Module */}
                     <td style={{ padding: "12px 16px" }}>
                       <span style={{
@@ -354,7 +407,8 @@ export default function AuditPage() {
                       ) : "—"}
                     </td>
                   </tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

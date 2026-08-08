@@ -110,10 +110,17 @@ function StockStatusBadge({ batch, available }) {
   const isExpired = batch.expiry_date && new Date(batch.expiry_date) < new Date();
   const isLowStock = available < batch.low_stock_threshold && available > 0;
   const isDepleted = available === 0;
+  // ✅ NEW: a dealer-linked batch sits here until the manager reviews the
+  // purchase on the Dealers page — not sellable/dispensable yet.
+  const isPendingApproval = batch.status === "PENDING_APPROVAL";
 
   let bgColor, textColor, label;
 
-  if (isExpired) {
+  if (isPendingApproval) {
+    bgColor = "#FEF3C7";
+    textColor = COLORS.warning;
+    label = "Pending Approval";
+  } else if (isExpired) {
     bgColor = "#FEE2E2";
     textColor = COLORS.danger;
     label = "Expired";
@@ -156,6 +163,7 @@ function ReturnToProviderModal({ availableBatches, onClose, onSuccess }) {
   const [busy, setBusy] = useState(false);
   const [dealers, setDealers] = useState([]);
   const [dealerId, setDealerId] = useState("");
+  const [dealersError, setDealersError] = useState("");
   // Refund policy: the refund owed by the supplier is quantity × the
   // batch's purchase (cost) price — never the MRP/selling price — and is
   // fixed the moment the return is confirmed, regardless of the reason
@@ -167,7 +175,11 @@ function ReturnToProviderModal({ availableBatches, onClose, onSuccess }) {
   useEffect(() => {
     let cancelled = false;
     import("../api/pharmacistApi").then(({ getDealers }) => {
-      getDealers().then((list) => { if (!cancelled) setDealers(list || []); }).catch(() => {});
+      getDealers()
+        .then((list) => { if (!cancelled) setDealers(list || []); })
+        .catch((e) => {
+          if (!cancelled) setDealersError(`Failed to load dealers: ${e?.message || e}`);
+        });
     });
     return () => { cancelled = true; };
   }, []);
@@ -1332,6 +1344,9 @@ export default function StockPage() {
 
   // Helper to calculate available stock
   const getAvailableStock = (batch) => {
+    // A batch awaiting manager approval isn't sellable yet — see
+    // StockStatusBadge / MedicineBatch.BATCH_STATUS_CHOICES on the backend.
+    if (batch.status === "PENDING_APPROVAL") return 0;
     const qty = parseFloat(batch.quantity) || 0;
     const allocated = parseFloat(batch.allocated_quantity) || 0;
     return Math.max(0, qty - allocated);
@@ -1430,8 +1445,15 @@ export default function StockPage() {
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           {filteredMedicines.map((medicine) => {
-            const activeBatches = batches.filter(b => 
-              b.medicine === medicine.medicine_id && b.status === 'ACTIVE'
+            // ✅ CHANGED: also show PENDING_APPROVAL batches (dealer-linked
+            // stock awaiting manager sign-off) — they used to vanish from
+            // this list entirely, which made a freshly-added dealer batch
+            // look like it never saved. REJECTED batches (returned to the
+            // dealer, zeroed out) stay hidden here — the Dealers page ledger
+            // is the audit trail for those.
+            const activeBatches = batches.filter(b =>
+              b.medicine === medicine.medicine_id &&
+              (b.status === 'ACTIVE' || b.status === 'PENDING_APPROVAL')
             );
             const isExpanded = expandedMedicine === medicine.medicine_id;
 
@@ -1560,10 +1582,12 @@ export default function StockPage() {
                                 <p style={{
                                   fontSize: 13,
                                   fontWeight: 700,
-                                  color: available < batch.low_stock_threshold ? COLORS.danger : COLORS.success,
+                                  color: batch.status === "PENDING_APPROVAL"
+                                    ? COLORS.gray[400]
+                                    : (available < batch.low_stock_threshold ? COLORS.danger : COLORS.success),
                                   margin: 0
                                 }}>
-                                  {available}
+                                  {batch.status === "PENDING_APPROVAL" ? "—" : available}
                                 </p>
                               </div>
 
@@ -1701,7 +1725,7 @@ export default function StockPage() {
                       </button>
                       {activeBatches.length > 0 && (
                         <button
-                          onClick={() => setReturnModal(activeBatches)}
+                          onClick={() => setReturnModal(activeBatches.filter(b => b.status === 'ACTIVE'))}
                           style={{
                             padding: "8px 12px",
                             background: COLORS.warning,

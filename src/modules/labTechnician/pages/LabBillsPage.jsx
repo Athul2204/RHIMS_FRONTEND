@@ -604,8 +604,6 @@ export default function LabBillsPage() {
                         </button>
                         <Link
                           to={`/lab/bills/print/${billId}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
                           style={{
                             padding: "6px 12px",
                             border: "1px solid #E8EDF4",

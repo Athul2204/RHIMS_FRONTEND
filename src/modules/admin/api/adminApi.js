@@ -12,8 +12,38 @@ const fetchList = async (defaultPath, arg = {}) => {
 };
 
 // ─── DASHBOARD ────────────────────────────────────────────────────
-export const getDashboardStats = async () => {
-  const res = await API.get("/administration/dashboard/");
+// `arg`, when given, is forwarded as query params — group admins pass
+// { branch: <id> } to scope the dashboard to one branch instead of the
+// aggregate view across all branches.
+export const getDashboardStats = async (arg = {}) => {
+  return fetchList("/administration/dashboard/", arg);
+};
+
+// ─── BRANCHES ─────────────────────────────────────────────────────
+// New in the multi-branch rebuild (spec §2.6) — group-admin only in the
+// UI, though the endpoint itself is what utils/branchDetection.js also
+// calls to figure out whether the current admin *is* a group admin.
+export const getBranchList = async (arg = {}) => {
+  return fetchList("/administration/branches/", arg);
+};
+
+export const createBranch = async (payload) => {
+  const res = await API.post("/administration/branches/", payload);
+  return res.data;
+};
+
+// Branch detail only supports GET/PATCH server-side (no PUT) — see the
+// API reference in the build spec §4.
+export const patchBranch = async (id, payload) => {
+  const res = await API.patch(`/administration/branches/${id}/`, payload);
+  return res.data;
+};
+
+// ─── PROMOTE TO GROUP ADMIN ───────────────────────────────────────
+// New in the multi-branch rebuild (spec §2.7) — visible only to existing
+// group admins, on the Staff page for Admin-role rows.
+export const promoteToGroupAdmin = async (staffId) => {
+  const res = await API.post(`/administration/staff/${staffId}/promote-group-admin/`);
   return res.data;
 };
 
@@ -57,6 +87,26 @@ export const getManagerList = async (arg = {}) => {
     return res.data;
   }
   const res = await API.get("/administration/staff/", { params: { role: "Manager", ...arg } });
+  return res.data;
+};
+
+// ─── MANAGER BRANCH ACCESS ────────────────────────────────────────
+// Group-admin only, backed by administration.models.ManagerBranchAccess —
+// grants a Manager access to a branch beyond their own home branch (no
+// "All Branches" concept, just specific additional branches). See
+// administration/views.py:ManagerBranchAccessListView/RevokeView.
+export const getManagerBranchAccess = async (managerId) => {
+  const res = await API.get("/administration/manager-branch-access/", { params: { manager: managerId } });
+  return res.data;
+};
+
+export const grantManagerBranchAccess = async (managerId, branchId) => {
+  const res = await API.post("/administration/manager-branch-access/", { manager: managerId, branch: branchId });
+  return res.data;
+};
+
+export const revokeManagerBranchAccess = async (grantId) => {
+  const res = await API.delete(`/administration/manager-branch-access/${grantId}/revoke/`);
   return res.data;
 };
 
@@ -229,12 +279,19 @@ export const getAuditLogs = async (arg = {}) => {
   return fetchList("/administration/audit/", arg);
 };
 // ─── HOSPITAL SETTINGS ────────────────────────────────────────────
-export const getHospitalSettings = async () => {
-  const res = await API.get("/administration/settings/");
+// Per-branch since the multi-branch rebuild. A group admin MUST pass
+// ?branch=<id> — HospitalSettingsView._target_branch 400s a group admin
+// who omits it (it has no branch of its own to resolve to). A
+// branch-scoped admin's own branch is resolved automatically server-side,
+// so `branchId` is simply omitted for them.
+export const getHospitalSettings = async (branchId) => {
+  const params = branchId ? { branch: branchId } : {};
+  const res = await API.get("/administration/settings/", { params });
   return res.data;
 };
 
-export const patchHospitalSettings = async (payload) => {
-  const res = await API.patch("/administration/settings/", payload);
+export const patchHospitalSettings = async (payload, branchId) => {
+  const params = branchId ? { branch: branchId } : {};
+  const res = await API.patch("/administration/settings/", payload, { params });
   return res.data;
 };

@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { getDashboardStats } from "../api/adminApi";
+import useBranchScope from "../hooks/useBranchScope";
 
 const G = "#16A34A";
 
@@ -122,6 +123,7 @@ const Skeleton = ({ h = 14, w = "100%", radius = 6 }) => (
 );
 
 export default function AdminDashboardPage() {
+  const { listParams } = useBranchScope();
   const [stats, setStats]     = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState("");
@@ -130,7 +132,11 @@ export default function AdminDashboardPage() {
   const fetchStats = useCallback(() => {
     setLoading(true);
     setError("");
-    getDashboardStats()
+    // Group admin narrowed the header switcher to one branch — the
+    // dashboard stats scope to it, same as every other admin-module list
+    // page; omitted entirely for "All branches" or a non-group-admin
+    // (the backend hard-scopes them regardless of what's sent).
+    getDashboardStats(listParams)
       .then(setStats)
       .catch((err) => {
         const status = err?.response?.status;
@@ -145,7 +151,7 @@ export default function AdminDashboardPage() {
         }
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [listParams]);
 
   useEffect(() => {
     fetchStats();

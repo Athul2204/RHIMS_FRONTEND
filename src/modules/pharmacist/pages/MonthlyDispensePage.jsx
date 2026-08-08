@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { getBills } from "../api/pharmacistApi";
+import { flattenFormError } from "../../../utils/formErrors";
 
 /* ─── brand colour ─────────────────────────────────────────── */
 const G = "#8B5CF6";
@@ -581,7 +582,7 @@ export default function MonthlyDispensePage() {
       const data = await getBills({ bill_status: "PAID" });
       setAllBills(Array.isArray(data) ? data : (data?.results ?? []));
     } catch (e) {
-      setError(String(e));
+      setError(flattenFormError(e));
     } finally {
       setLoading(false);
     }

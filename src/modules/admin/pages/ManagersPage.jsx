@@ -5,7 +5,9 @@ import { isValidPhone, sanitizePhoneInput, PHONE_ERROR_MESSAGE } from "../../../
 import {
   getManagerList, createStaff, patchStaff,
   deactivateStaff, reactivateStaff,
+  getManagerBranchAccess, grantManagerBranchAccess, revokeManagerBranchAccess,
 } from "../api/adminApi";
+import useBranchScope from "../hooks/useBranchScope";
 
 const ACCENT = "#EA580C"; // manager orange
 
@@ -22,6 +24,8 @@ const ICONS = {
   edit:   "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7 M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
   close:  "M18 6L6 18 M6 6l12 12",
   user:   "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2 M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
+  building: "M3 21h18 M6 21V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v14 M9 9h1 M14 9h1 M9 13h1 M14 13h1 M9 17h1 M14 17h1",
+  trash: "M3 6h18 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6",
 };
 
 const EMPTY = {
@@ -32,6 +36,7 @@ const EMPTY = {
   salary: "30000",
   joining_date: new Date().toISOString().split("T")[0],
   address: "",
+  branch: "",
 };
 
 /* ── Helpers ── */
@@ -79,6 +84,7 @@ const Field = ({ label, children, required, span }) => (
 
 /* ═══════════════════════════════════════════════════════ */
 export default function ManagersPage() {
+  const { isGroupAdmin, branches, selectedBranch, listParams } = useBranchScope();
   const [list,       setList]       = useState([]);
   const [loading,    setLoading]    = useState(true);
   const [error,      setError]      = useState("");
@@ -96,11 +102,79 @@ export default function ManagersPage() {
   const [toast, showToast]        = useToast();
   const [editTarget,  setEditTarget]  = useState(null);
 
+  /* ── Branch access modal (group admin only) ── */
+  const [accessTarget,  setAccessTarget]  = useState(null);   // the manager row
+  const [accessGrants,  setAccessGrants]  = useState([]);     // this manager's current grants
+  const [accessLoading, setAccessLoading] = useState(false);
+  const [accessAdding,  setAccessAdding]  = useState("");     // branch_id picked in the add-select
+  const [accessBusy,    setAccessBusy]    = useState(false);  // grant/revoke in flight
+  const [accessError,   setAccessError]   = useState("");
+
+  const openAccess = (m) => {
+    setAccessTarget(m);
+    setAccessGrants([]);
+    setAccessAdding("");
+    setAccessError("");
+    setAccessLoading(true);
+    getManagerBranchAccess(m.id)
+      .then(setAccessGrants)
+      .catch(() => setAccessError("Failed to load branch access."))
+      .finally(() => setAccessLoading(false));
+  };
+
+  const closeAccess = () => setAccessTarget(null);
+
+  const handleGrantAccess = async () => {
+    if (!accessAdding) return;
+    setAccessBusy(true);
+    setAccessError("");
+    try {
+      const grant = await grantManagerBranchAccess(accessTarget.id, Number(accessAdding));
+      setAccessGrants(g => [...g, grant]);
+      setAccessAdding("");
+      showToast(`Granted access to ${grant.branch_name}.`);
+    } catch (err) {
+      const backendErrors = err?.response?.data?.errors || err?.response?.data;
+      const msg = backendErrors && typeof backendErrors === "object"
+        ? Object.values(backendErrors).flat().join(" ")
+        : "Failed to grant access.";
+      setAccessError(msg);
+    } finally {
+      setAccessBusy(false);
+    }
+  };
+
+  const handleRevokeAccess = async (grant) => {
+    setAccessBusy(true);
+    setAccessError("");
+    try {
+      await revokeManagerBranchAccess(grant.id);
+      setAccessGrants(g => g.filter(x => x.id !== grant.id));
+      showToast(`Revoked access to ${grant.branch_name}.`);
+    } catch {
+      setAccessError("Failed to revoke access.");
+    } finally {
+      setAccessBusy(false);
+    }
+  };
+
+  // Branches this manager could still be granted — excludes their home
+  // branch and anything already granted.
+  const accessAvailableBranches = accessTarget
+    ? branches.filter(b =>
+        b.branch_id !== accessTarget.branch &&
+        !accessGrants.some(g => g.branch === b.branch_id)
+      )
+    : [];
+
   /* ── Load ── */
   const load = useCallback((arg) => {
     setLoading(true);
     setError("");
-    const params = typeof arg === "string" ? undefined : { role: "Manager", all: showAll ? "true" : undefined };
+    // Group admin narrowed the header switcher to one branch — forwarded
+    // as a param on a fresh load; omitted for "All branches" or a
+    // non-group-admin (backend hard-scopes them regardless).
+    const params = typeof arg === "string" ? undefined : { role: "Manager", all: showAll ? "true" : undefined, ...listParams };
     const url    = typeof arg === "string" ? arg : undefined;
     getManagerList(url ?? params)
       .then(d => {
@@ -112,7 +186,7 @@ export default function ManagersPage() {
       })
       .catch(() => setError("Failed to load managers."))
       .finally(() => setLoading(false));
-  }, [showAll]);
+  }, [showAll, listParams]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -130,7 +204,7 @@ export default function ManagersPage() {
 
   /* ── Modal open ── */
   const openAdd = () => {
-    setForm(EMPTY);
+    setForm({ ...EMPTY, branch: selectedBranch ?? "" });
     setFormError("");
     setEditTarget(null);
     setModal("add");
@@ -153,6 +227,7 @@ export default function ManagersPage() {
       salary:         m.salary         ?? "30000",
       joining_date:   m.joining_date   ?? "",
       address:        m.address        ?? "",
+      branch:         m.branch         ?? "",
     });
     setFormError("");
     setModal("edit");
@@ -175,6 +250,15 @@ export default function ManagersPage() {
       if (!payload.user.username) delete payload.user.username;
       if (payload.salary === "" || payload.salary === null) delete payload.salary;
       else payload.salary = parseInt(payload.salary, 10);
+
+      // Branch is only ever picked explicitly by a group admin — a
+      // branch-scoped admin's staff always belongs to their own branch,
+      // resolved automatically server-side.
+      if (!isGroupAdmin || !payload.branch) {
+        delete payload.branch;
+      } else {
+        payload.branch = Number(payload.branch);
+      }
 
       if (modal === "add") {
         await createStaff(payload);
@@ -326,6 +410,12 @@ export default function ManagersPage() {
                 <Row label="Qualification" value={m.qualification ?? "—"} />
                 <Row label="Salary"        value={m.salary ? `₹${Number(m.salary).toLocaleString()}` : "—"} />
                 <Row label="Joining"       value={m.joining_date ?? "—"} />
+                {isGroupAdmin && (
+                  <Row label="Branch" value={(() => {
+                    const b = branches.find(b => b.branch_id === m.branch);
+                    return b ? `${b.name} (${b.code})` : "—";
+                  })()} />
+                )}
               </div>
 
               {/* Card actions */}
@@ -335,6 +425,16 @@ export default function ManagersPage() {
                   border: `1px solid #FED7AA`, background: "#FFF7ED",
                   cursor: "pointer", fontSize: "12px", fontWeight: 500, color: ACCENT,
                 }}>Edit</button>
+                {isGroupAdmin && (
+                  <button onClick={() => openAccess(m)} style={{
+                    flex: 1, padding: "7px", borderRadius: "8px",
+                    border: "1px solid #BFDBFE", background: "#EFF6FF",
+                    cursor: "pointer", fontSize: "12px", fontWeight: 500, color: "#2563EB",
+                    display: "flex", alignItems: "center", justifyContent: "center", gap: "5px",
+                  }}>
+                    <Ico path={ICONS.building} size={12} color="#2563EB" /> Branches
+                  </button>
+                )}
                 <button onClick={() => toggleStatus(m)} style={{
                   flex: 1, padding: "7px", borderRadius: "8px",
                   border: `1px solid ${m.is_active ? "#FECACA" : "#BBF7D0"}`,
@@ -426,6 +526,21 @@ export default function ManagersPage() {
                 <input style={inp} type="date" value={form.joining_date}
                   onChange={e => handleChange("joining_date", e.target.value)} />
               </Field>
+              {isGroupAdmin && (
+                <Field label="Branch">
+                  {modal === "add" && selectedBranch ? (
+                    <div style={{ ...inp, display: "flex", alignItems: "center", justifyContent: "space-between", background: "#F8FAFC", color: "#475569" }}>
+                      <span>{branches.find(b => b.branch_id === selectedBranch)?.name ?? "Selected branch"}</span>
+                      <span style={{ fontSize: "11px", color: "#94A3B8" }}>locked to header selection</span>
+                    </div>
+                  ) : (
+                    <select style={{ ...inp, cursor: "pointer" }} value={form.branch} onChange={e => handleChange("branch", e.target.value)}>
+                      <option value="">— Select a branch —</option>
+                      {branches.map(b => <option key={b.branch_id} value={b.branch_id}>{b.name} ({b.code})</option>)}
+                    </select>
+                  )}
+                </Field>
+              )}
               <Field label="Address" span>
                 <input style={inp} value={form.address}
                   onChange={e => handleChange("address", e.target.value)}
@@ -447,6 +562,118 @@ export default function ManagersPage() {
             }}>
               {submitting ? "Saving…" : modal === "add" ? "Add Manager" : "Save Changes"}
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ══ Branch Access Modal (group admin only) ══ */}
+      {accessTarget && (
+        <Modal
+          title={`Branch Access — ${accessTarget.staff_code ?? accessTarget.user?.username}`}
+          onClose={closeAccess}
+        >
+          {accessError && (
+            <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#DC2626", borderRadius: "8px", padding: "10px 14px", marginBottom: "16px", fontSize: "13px", flexShrink: 0 }}>
+              {accessError}
+            </div>
+          )}
+
+          <div style={{ overflowY: "auto", flex: 1, paddingRight: "4px" }}>
+            {/* Home branch — read-only, not a ManagerBranchAccess row */}
+            <div style={{ marginBottom: "16px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748B", marginBottom: "8px" }}>Home branch</div>
+              <div style={{
+                display: "flex", alignItems: "center", gap: "8px",
+                padding: "9px 12px", borderRadius: "9px",
+                background: "#F8FAFC", border: "1px solid #E8EDF4",
+                fontSize: "13px", fontWeight: 600, color: "#475569",
+              }}>
+                <Ico path={ICONS.building} size={13} color="#64748B" />
+                {(() => {
+                  const b = branches.find(b => b.branch_id === accessTarget.branch);
+                  return b ? `${b.name} (${b.code})` : "—";
+                })()}
+              </div>
+            </div>
+
+            {/* Granted branches */}
+            <div style={{ marginBottom: "16px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748B", marginBottom: "8px" }}>
+                Additional branches
+              </div>
+              {accessLoading ? (
+                <div style={{ fontSize: "13px", color: "#94A3B8" }}>Loading…</div>
+              ) : accessGrants.length === 0 ? (
+                <div style={{ fontSize: "13px", color: "#94A3B8" }}>No additional branches granted yet.</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {accessGrants.map(g => (
+                    <div key={g.id} style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between",
+                      padding: "9px 12px", borderRadius: "9px",
+                      background: "#F0FDF4", border: "1px solid #BBF7D0",
+                    }}>
+                      <span style={{ fontSize: "13px", fontWeight: 600, color: "#15803D" }}>
+                        {g.branch_name} <span style={{ fontFamily: "monospace", fontSize: "11px", color: "#4ADE80" }}>({g.branch_code})</span>
+                      </span>
+                      <button
+                        onClick={() => handleRevokeAccess(g)}
+                        disabled={accessBusy}
+                        title="Revoke access"
+                        style={{
+                          display: "flex", alignItems: "center", gap: "5px",
+                          padding: "5px 10px", borderRadius: "7px",
+                          border: "1px solid #FECACA", background: "#FEF2F2",
+                          cursor: accessBusy ? "not-allowed" : "pointer",
+                          fontSize: "12px", fontWeight: 500, color: "#EF4444",
+                        }}
+                      >
+                        <Ico path={ICONS.trash} size={12} color="#EF4444" /> Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Grant a new branch */}
+            <div>
+              <div style={{ fontSize: "12px", fontWeight: 600, color: "#64748B", marginBottom: "8px" }}>Grant access to</div>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <select
+                  style={{ ...inp, cursor: "pointer" }}
+                  value={accessAdding}
+                  onChange={e => setAccessAdding(e.target.value)}
+                  disabled={accessLoading || accessAvailableBranches.length === 0}
+                >
+                  <option value="">
+                    {accessAvailableBranches.length === 0 ? "No other branches available" : "— Select a branch —"}
+                  </option>
+                  {accessAvailableBranches.map(b => (
+                    <option key={b.branch_id} value={b.branch_id}>{b.name} ({b.code})</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleGrantAccess}
+                  disabled={!accessAdding || accessBusy}
+                  style={{
+                    padding: "9px 18px", borderRadius: "9px", border: "none",
+                    background: !accessAdding || accessBusy ? "#BFDBFE" : "#2563EB",
+                    cursor: !accessAdding || accessBusy ? "not-allowed" : "pointer",
+                    fontSize: "13px", fontWeight: 600, color: "#fff", whiteSpace: "nowrap",
+                  }}
+                >
+                  {accessBusy ? "…" : "Grant"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "20px", paddingTop: "16px", borderTop: "1px solid #F1F5F9", flexShrink: 0 }}>
+            <button onClick={closeAccess} style={{
+              padding: "9px 20px", borderRadius: "9px", border: "1px solid #E2E8F0",
+              background: "#fff", cursor: "pointer", fontSize: "13px", color: "#475569",
+            }}>Close</button>
           </div>
         </Modal>
       )}

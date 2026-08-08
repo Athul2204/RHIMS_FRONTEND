@@ -3,6 +3,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { getMedicines, getBatches, createMedicine, updateMedicine } from "../api/pharmacistApi";
+import { flattenFormError } from "../../../utils/formErrors";
 
 const G = "#8B5CF6";
 const INP = { padding: "9px 12px", borderRadius: 8, border: "1.5px solid #E5E7EB", fontSize: 13, color: "#1E293B", outline: "none", background: "#fff", width: "100%", boxSizing: "border-box" };
@@ -100,7 +101,7 @@ export function MedicineModal({ medicine, onSave, onClose }) {
         await createMedicine(form);
       }
       onSave();
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(flattenFormError(e)); }
     finally { setSaving(false); }
   };
 
@@ -233,6 +234,22 @@ export function MedicineModal({ medicine, onSave, onClose }) {
   );
 }
 
+function BatchStatusBadge({ status }) {
+  const map = {
+    ACTIVE:           { bg: "#F0FDF4", color: "#15803D", label: "Active" },
+    PENDING_APPROVAL: { bg: "#FFFBEB", color: "#B45309", label: "Pending Approval" },
+    REJECTED:         { bg: "#FEF2F2", color: "#B91C1C", label: "Rejected" },
+    EXPIRED:          { bg: "#FEF2F2", color: "#B91C1C", label: "Expired" },
+    DEPLETED:         { bg: "#F3E8FF", color: "#7C3AED", label: "Depleted" },
+  };
+  const s = map[status] || { bg: "#F1F5F9", color: "#475569", label: status };
+  return (
+    <span style={{ padding: "2px 7px", borderRadius: 12, fontSize: 10, fontWeight: 700, background: s.bg, color: s.color }}>
+      {s.label}
+    </span>
+  );
+}
+
 function BatchesPanel({ medicine, batches }) {
   const active = batches.filter(b => b.medicine_id === medicine.medicine_id || b.medicine === medicine.medicine_id);
   const today = new Date().toISOString().split("T")[0];
@@ -259,7 +276,7 @@ function BatchesPanel({ medicine, batches }) {
                   {b.expiry_date ? new Date(b.expiry_date).toLocaleDateString("en-IN") : "—"}
                 </span>
                 <div style={{ textAlign: "center" }}>
-                  <span style={{ padding: "2px 7px", borderRadius: 12, fontSize: 10, fontWeight: 700, background: b.status === "ACTIVE" ? "#F0FDF4" : "#FEF2F2", color: b.status === "ACTIVE" ? "#15803D" : "#B91C1C" }}>{b.status}</span>
+                  <BatchStatusBadge status={b.status} />
                 </div>
               </div>
             );
@@ -369,14 +386,17 @@ export default function MedicinesPage() {
       if (category)        params.category = category;
       const [meds, batchData] = await Promise.all([
         getMedicines({ ...params, show_inactive: true }),
-        getBatches({ status: "ACTIVE" }),
+        // ✅ FIX: also fetch PENDING_APPROVAL batches so the pharmacist
+        // can see dealer-linked stock awaiting manager sign-off. REJECTED
+        // batches are excluded — they've been zeroed out and returned.
+        getBatches({ status: "ACTIVE,PENDING_APPROVAL" }),
       ]);
       let medList = Array.isArray(meds) ? meds : (meds?.results ?? []);
       if (inStock)      medList = medList.filter(m => (m.total_stock ?? 0) > 0);
       if (routeFilter)  medList = medList.filter(m => m.default_route === routeFilter);
       setMedicines(medList);
       setBatches(Array.isArray(batchData) ? batchData : (batchData?.results ?? []));
-    } catch (e) { showToast(String(e), false); }
+    } catch (e) { showToast(flattenFormError(e), false); }
     finally { setLoading(false); }
   }, [debouncedSearch, category, inStock, routeFilter]);
 

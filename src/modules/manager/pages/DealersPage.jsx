@@ -11,7 +11,28 @@ import { isValidPhone, sanitizePhoneInput, PHONE_ERROR_MESSAGE } from "../../../
 const ACCENT = "#6366F1";
 const fmt = n => `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
 
-const DEALS_IN_LABEL = { MEDICINE: "Medicine", SUPPLY: "Supplies", GENERAL: "General Items", BOTH: "Both" };
+const DEALS_IN_NAMES = { MEDICINE: "Medicine", SUPPLY: "Supplies", GENERAL: "General Items" };
+const ALL_DEALS_IN_CODES = ["MEDICINE", "SUPPLY", "GENERAL"];
+
+// Builds a readable label from a stored deals_in value, which may be a
+// legacy single code, the legacy "BOTH" (= all three), or a comma-separated
+// combination like "MEDICINE,SUPPLY" (any two, or all three).
+function dealsInLabel(value) {
+  if (!value) return "";
+  if (value === "BOTH") return "All";
+  const codes = value.split(",").map(s => s.trim()).filter(Boolean);
+  if (codes.length === 0) return "";
+  if (codes.length === ALL_DEALS_IN_CODES.length) return "All";
+  return codes.map(c => DEALS_IN_NAMES[c] || c).join(" + ");
+}
+
+// Normalizes a deals_in value into an array of category codes, for
+// pre-checking the right checkboxes when editing an existing dealer.
+function dealsInToCodes(value) {
+  if (!value) return [];
+  if (value === "BOTH") return [...ALL_DEALS_IN_CODES];
+  return value.split(",").map(s => s.trim()).filter(Boolean);
+}
 
 const TXN_TYPE_LABEL = {
   PURCHASE:    "Purchase",
@@ -85,15 +106,39 @@ const EMPTY_DEALER = {
 function DealerForm({ initial, onSubmit, onCancel, saving, error }) {
   const [form, setForm] = useState(initial || EMPTY_DEALER);
   const [phoneError, setPhoneError] = useState("");
+  const [dealsInError, setDealsInError] = useState("");
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // Checkbox-backed selection, initialized from whatever deals_in value
+  // was passed in (legacy single code, legacy "BOTH", or a combo string).
+  const [dealsInCodes, setDealsInCodes] = useState(
+    () => dealsInToCodes((initial || EMPTY_DEALER).deals_in)
+  );
+  const toggleDealsIn = (code) => {
+    setDealsInCodes(codes =>
+      codes.includes(code) ? codes.filter(c => c !== code) : [...codes, code]
+    );
+    setDealsInError("");
+  };
 
   const handleSubmitClick = () => {
     if (form.phone?.trim() && !isValidPhone(form.phone)) {
       setPhoneError(PHONE_ERROR_MESSAGE);
       return;
     }
+    if (dealsInCodes.length === 0) {
+      setDealsInError("Select at least one category.");
+      return;
+    }
     setPhoneError("");
-    onSubmit(form);
+    setDealsInError("");
+    // Send "BOTH" when all three are picked (keeps existing backend
+    // filtering/defaults working); otherwise send the exact combination,
+    // e.g. "MEDICINE,SUPPLY" for any two categories.
+    const deals_in = dealsInCodes.length === ALL_DEALS_IN_CODES.length
+      ? "BOTH"
+      : ALL_DEALS_IN_CODES.filter(c => dealsInCodes.includes(c)).join(",");
+    onSubmit({ ...form, deals_in });
   };
 
   return (
@@ -138,12 +183,22 @@ function DealerForm({ initial, onSubmit, onCancel, saving, error }) {
       <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:"12px",marginBottom:"14px" }}>
         <div>
           <label style={lbl}>Deals In</label>
-          <select value={form.deals_in} onChange={e=>set("deals_in",e.target.value)} style={inp}>
-            <option value="BOTH">Both</option>
-            <option value="MEDICINE">Medicine</option>
-            <option value="SUPPLY">Supplies</option>
-            <option value="GENERAL">General Items</option>
-          </select>
+          <div style={{ display:"flex",flexDirection:"column",gap:"6px",padding:"8px 10px",border:"1px solid #E2E8F0",borderRadius:"8px" }}>
+            {ALL_DEALS_IN_CODES.map(code => (
+              <label key={code} style={{ display:"flex",alignItems:"center",gap:"8px",fontSize:"13px",color:"#374151",cursor:"pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={dealsInCodes.includes(code)}
+                  onChange={() => toggleDealsIn(code)}
+                />
+                {DEALS_IN_NAMES[code]}
+              </label>
+            ))}
+          </div>
+          {dealsInError && <p style={{ fontSize:"11px", color:"#EF4444", margin:"4px 0 0" }}>{dealsInError}</p>}
+          <p style={{ fontSize:"11px", color:"#94A3B8", margin:"4px 0 0" }}>
+            Pick one, two, or all three — e.g. Medicine + Supplies only.
+          </p>
         </div>
         <div>
           <label style={lbl}>Opening Balance (₹)</label>
@@ -208,13 +263,36 @@ function FinalizeModal({ txn, onClose, onDone }) {
     ? "Auto-log a matching payment so this purchase nets to ₹0 on the ledger"
     : "Auto-log a matching cash refund so this return nets to ₹0 on the ledger";
 
+  // ✅ FIX: "Amount" above corrects the TRUE value of this purchase/return
+  // (e.g. the invoice was actually a different figure) — it is NOT "how
+  // much I'm paying today". Those used to be the same field, so entering
+  // 100 here against a ₹150 purchase and picking "Paid Now" silently
+  // rewrote the purchase down to ₹100 *and* marked it fully paid, instead
+  // of recording a ₹100 partial payment against the real ₹150 owed — the
+  // ledger then read "Settled, ₹0 balance" instead of "₹50 still due".
+  // `paidAmount` is a separate field for that: how much is actually
+  // changing hands right now. Defaults to the full amount (unchanged,
+  // full-settlement behaviour); lower it for a partial payment/refund —
+  // the ₹150 purchase stays ₹150, only ₹100 is logged as paid, and the
+  // remaining ₹50 stays open on the ledger as Due.
+  const [paidAmount, setPaidAmount] = useState(String(txn.amount));
+  const amountNum = parseFloat(amount) || 0;
+  const paidAmountNum = parseFloat(paidAmount) || 0;
+  const isPartialPayment = canAutoSettle && autoSettle && paidAmountNum > 0 && paidAmountNum < amountNum;
+  const remainingNum = Math.max(0, amountNum - paidAmountNum);
+
   const submit = async () => {
     setSaving(true); setError(null);
     try {
       const payload = { action };
       if (action === "CONFIRM") {
         if (settlementMethod) payload.settlement_method = settlementMethod;
-        payload.amount = parseFloat(amount);
+        payload.amount = amountNum;
+        // Only send paid_amount when it's genuinely a partial payment —
+        // if it's equal to (or, after an amount correction above, now
+        // exceeds) the amount, leave it out so the backend just settles
+        // in full at the (possibly corrected) amount, same as before.
+        if (isPartialPayment) payload.paid_amount = paidAmountNum;
         if (referenceNumber) payload.reference_number = referenceNumber;
         payload.due_date = isPending && dueDate ? dueDate : null;
         payload.auto_settle_payment = canAutoSettle ? autoSettle : false;
@@ -245,6 +323,22 @@ function FinalizeModal({ txn, onClose, onDone }) {
         <button onClick={()=>setAction("CONFIRM")} style={{ flex:1,padding:"9px",borderRadius:"9px",border:"none",fontWeight:700,fontSize:"13px",cursor:"pointer",background:action==="CONFIRM"?"#16A34A":"#F1F5F9",color:action==="CONFIRM"?"#fff":"#64748B" }}>✓ Confirm</button>
         <button onClick={()=>setAction("REJECT")} style={{ flex:1,padding:"9px",borderRadius:"9px",border:"none",fontWeight:700,fontSize:"13px",cursor:"pointer",background:action==="REJECT"?"#DC2626":"#F1F5F9",color:action==="REJECT"?"#fff":"#64748B" }}>✕ Reject</button>
       </div>
+
+      {/* A PURCHASE-sourced batch sits at PENDING_APPROVAL — not sellable/
+          dispensable yet — until this transaction is resolved either way.
+          Make that consequence visible right where the manager decides. */}
+      {isPurchase && (
+        <div style={{
+          background: action === "REJECT" ? "#FEF2F2" : "#F0FDF4",
+          border: `1px solid ${action === "REJECT" ? "#FECACA" : "#BBF7D0"}`,
+          borderRadius:"9px", padding:"10px 14px", marginBottom:"18px",
+          fontSize:"12px", color: action === "REJECT" ? "#991B1B" : "#166534",
+        }}>
+          {action === "REJECT"
+            ? "Rejecting this purchase returns the remaining (unsold) stock from that batch to the dealer — it will be zeroed out and marked as rejected. Anything already dispensed to patients is unaffected."
+            : "Confirming this purchase makes that batch's stock available for sale. Until confirmed, it stays reserved and cannot be dispensed or billed."}
+        </div>
+      )}
 
       {action === "CONFIRM" && (
         <>
@@ -310,6 +404,25 @@ function FinalizeModal({ txn, onClose, onDone }) {
               <input type="checkbox" checked={autoSettle} onChange={e=>setAutoSettle(e.target.checked)} />
               {autoSettleLabel}
             </label>
+          )}
+
+          {canAutoSettle && autoSettle && (
+            <div style={{ marginBottom:"14px" }}>
+              <label style={lbl}>
+                {isPurchase ? "Paying Now (₹)" : "Refunded Now (₹)"}
+                <span style={{ fontWeight:400,color:"#94A3B8" }}> — lower this for a partial {isPurchase ? "payment" : "refund"}</span>
+              </label>
+              <input type="number" step="0.01" value={paidAmount} onChange={e=>setPaidAmount(e.target.value)} style={inp} />
+              {isPartialPayment ? (
+                <p style={{ fontSize:"11px",color:"#D97706",margin:"4px 0 0",fontWeight:600 }}>
+                  {fmt(remainingNum)} will stay outstanding on the ledger as Due — the {fmt(amountNum)} {TXN_TYPE_LABEL[transactionType].toLowerCase()} itself won't be changed.
+                </p>
+              ) : (
+                <p style={{ fontSize:"10.5px",color:"#94A3B8",margin:"4px 0 0" }}>
+                  Matches the amount above by default — settles this in full.
+                </p>
+              )}
+            </div>
           )}
         </>
       )}
@@ -389,6 +502,19 @@ function BulkFinalizeModal({ dealerId, txns, onClose, onDone }) {
       {mixedTypes && (
         <div style={{ background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:"8px",padding:"10px 14px",marginBottom:"14px",fontSize:"12px",color:"#1E40AF" }}>
           This batch mixes purchases and returns — each still auto-pairs its own matching payment/refund leg individually.
+        </div>
+      )}
+
+      {hasPurchase && (
+        <div style={{
+          background: action === "REJECT" ? "#FEF2F2" : "#F0FDF4",
+          border: `1px solid ${action === "REJECT" ? "#FECACA" : "#BBF7D0"}`,
+          borderRadius:"8px", padding:"10px 14px", marginBottom:"14px",
+          fontSize:"12px", color: action === "REJECT" ? "#991B1B" : "#166534",
+        }}>
+          {action === "REJECT"
+            ? "Rejecting the purchase(s) in this batch returns their remaining (unsold) stock to the dealer and zeroes it out."
+            : "Confirming the purchase(s) in this batch makes their stock available for sale — until confirmed it stays reserved."}
         </div>
       )}
 
@@ -716,7 +842,10 @@ function DealerDetail({ dealerId, onClose, onChanged }) {
   // gone to review at all.
   const [cancellingId, setCancellingId] = useState(null);
   const handleQuickCancel = async (t) => {
-    if (!window.confirm(`Cancel this ${TXN_TYPE_LABEL[t.transaction_type]} of ${fmt(t.amount)}? It will be marked Rejected and won't affect the balance.`)) return;
+    const stockNote = t.transaction_type === "PURCHASE"
+      ? " Its batch's remaining (unsold) stock will be returned to the dealer and zeroed out."
+      : "";
+    if (!window.confirm(`Cancel this ${TXN_TYPE_LABEL[t.transaction_type]} of ${fmt(t.amount)}? It will be marked Rejected and won't affect the balance.${stockNote}`)) return;
     setCancellingId(t.transaction_id);
     try {
       await finalizeDealerTransaction(t.transaction_id, { action: "REJECT" });
@@ -782,9 +911,12 @@ function DealerDetail({ dealerId, onClose, onChanged }) {
   // voids it (and its auto-paired leg, if any) via the backend, which
   // drops it out of Dealer.balance while keeping it on the ledger.
   const handleVoid = async (txn) => {
+    const stockNote = txn.transaction_type === "PURCHASE"
+      ? "\nIts batch's remaining (unsold) stock will also be returned to the dealer and zeroed out.\n"
+      : "";
     const reason = window.prompt(
       `Void this ${TXN_TYPE_LABEL[txn.transaction_type]} of ${fmt(txn.amount)}?\n` +
-      `This removes it from the balance calculation but keeps it visible in history.\n\n` +
+      `This removes it from the balance calculation but keeps it visible in history.${stockNote}\n` +
       `Optional reason (e.g. "duplicate entry"):`
     );
     if (reason === null) return; // cancelled
@@ -839,7 +971,7 @@ function DealerDetail({ dealerId, onClose, onChanged }) {
             <Badge bg={dealer.is_active ? "#DCFCE7" : "#FEE2E2"} color={dealer.is_active ? "#166534" : "#991B1B"}>
               {dealer.is_active ? "Active" : "Inactive"}
             </Badge>
-            <Badge bg="#EDE9FE" color="#5B21B6">{DEALS_IN_LABEL[dealer.deals_in]}</Badge>
+            <Badge bg="#EDE9FE" color="#5B21B6">{dealsInLabel(dealer.deals_in)}</Badge>
             {pendingTxns.length > 0 && <Badge bg="#FEF3C7" color="#92400E">{pendingTxns.length} pending</Badge>}
           </div>
           <div style={{ display:"flex",gap:"8px",marginTop:"14px" }}>
@@ -967,15 +1099,29 @@ function DealerDetail({ dealerId, onClose, onChanged }) {
             </div>
 
             {(() => {
-              // Auto-paired settlement legs (the PAYMENT/CASH_REFUND the
-              // backend logs automatically alongside a PAID/REFUNDED
-              // PURCHASE or CREDIT_NOTE) are shown nested under their
-              // parent instead of as their own raw row — two lines for one
-              // real-world event used to read as confusing duplicate
-              // entries. `is_settled` (from the backend) marks the parent.
-              const isAutoChild = (t) => !!t.linked_transaction && (t.notes || "").startsWith("Auto-logged:");
-              const findChild = (t) => txns.find(o => o.linked_transaction === t.transaction_id && isAutoChild(o));
-              const mainTxns = filteredTxns.filter(t => !isAutoChild(t));
+              // A settlement leg is any PAYMENT/CASH_REFUND that points back
+              // at another transaction via linked_transaction — whether the
+              // backend auto-paired it (see AUTO_SETTLE_PAIRS) or a manager
+              // manually logged it via "Pay Remaining"/"Collect Remaining"
+              // or the bulk "Pay / Collect Due Items" flow. It's shown
+              // nested under its parent instead of as its own raw row.
+              // ✅ FIX: this used to only recognise the auto-paired case
+              // (notes starting with "Auto-logged:"), so every manually
+              // logged partial payment — the whole point of "Pay
+              // Remaining" — showed up as its own top-level ledger row
+              // instead of nesting under the purchase/return it settles,
+              // flooding the ledger with what's really one event split
+              // across several rows. `is_settled` (from the backend)
+              // marks the parent as fully settled regardless.
+              const isSettlementLeg = (t) =>
+                !!t.linked_transaction && (t.transaction_type === "PAYMENT" || t.transaction_type === "CASH_REFUND");
+              // A parent can now have MORE than one settlement leg (e.g.
+              // two separate partial payments before it's paid off) —
+              // collect all of them, not just the first, so a second
+              // partial payment doesn't silently disappear instead of
+              // nesting once every leg is correctly recognised above.
+              const findChildren = (t) => txns.filter(o => o.linked_transaction === t.transaction_id && isSettlementLeg(o));
+              const mainTxns = filteredTxns.filter(t => !isSettlementLeg(t));
 
               if (mainTxns.length === 0) {
                 return (
@@ -988,10 +1134,18 @@ function DealerDetail({ dealerId, onClose, onChanged }) {
               return (
               <div style={{ background:"#fff",borderRadius:"12px",border:"1px solid #E8EDF4",overflow:"hidden" }}>
                 {mainTxns.map((t, i) => {
-                  const child = findChild(t);
-                  const settled = t.is_settled || (child && child.status === "CONFIRMED");
+                  const children = findChildren(t);
+                  // ✅ FIX: trust the backend's is_settled as-is instead of
+                  // re-deriving "settled" from "does any confirmed child
+                  // exist" — that used to mark a ₹150 purchase "✓ Settled"
+                  // the moment a linked ₹100 partial payment was confirmed,
+                  // hiding the ₹50 still owed. is_settled now checks the
+                  // linked amount(s) actually cover the full amount.
+                  const settled = t.is_settled;
                   const isDue = t.status === "CONFIRMED" && t.settlement_method === "CREDIT" && !settled &&
                     (t.transaction_type === "PURCHASE" || t.transaction_type === "CREDIT_NOTE");
+                  const amountDue = Number(t.amount_due || 0);
+                  const hasPartialPayment = amountDue > 0 && amountDue < Number(t.amount || 0);
                   return (
                   <div key={t.transaction_id} style={{ padding:"12px 16px",borderBottom: i < mainTxns.length-1 ? "1px solid #F1F5F9" : "none",display:"flex",alignItems:"flex-start",gap:"10px" }}>
                   {isDue && dueTxns.length > 1 && (
@@ -1029,13 +1183,18 @@ function DealerDetail({ dealerId, onClose, onChanged }) {
                     </div>
                     <div style={{ textAlign:"right",whiteSpace:"nowrap" }}>
                       <div style={{ fontSize:"14px",fontWeight:800,color:"#0F172A" }}>{fmt(t.amount)}</div>
+                      {hasPartialPayment && (
+                        <div style={{ fontSize:"11px",color:"#D97706",fontWeight:700 }}>{fmt(amountDue)} due</div>
+                      )}
                       {t.status === "CONFIRMED" && t.balance_after != null && (
                         <div style={{ fontSize:"11px",color:"#94A3B8" }}>bal: {fmt(t.balance_after)}</div>
                       )}
                       {isDue && duePayIds.length <= 1 && (
-                        <button onClick={() => setPayTarget(t)}
+                        <button onClick={() => setPayTarget(hasPartialPayment ? { ...t, amount: amountDue } : t)}
                           style={{ marginTop:"6px",padding:"5px 12px",borderRadius:"7px",border:"none",background: t.transaction_type === "PURCHASE" ? "#16A34A" : ACCENT,color:"#fff",fontWeight:700,fontSize:"11.5px",cursor:"pointer",whiteSpace:"nowrap" }}>
-                          {t.transaction_type === "PURCHASE" ? "Pay Now" : "Collect Refund"}
+                          {t.transaction_type === "PURCHASE"
+                            ? (hasPartialPayment ? "Pay Remaining" : "Pay Now")
+                            : (hasPartialPayment ? "Collect Remaining" : "Collect Refund")}
                         </button>
                       )}
                       {t.status === "CONFIRMED" && (
@@ -1047,10 +1206,31 @@ function DealerDetail({ dealerId, onClose, onChanged }) {
                       )}
                     </div>
                   </div>
-                  {child && (
-                    <div style={{ marginTop:"8px",paddingTop:"8px",borderTop:"1px dashed #F1F5F9",display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#16A34A" }}>
-                      <span>↳ Auto-settled: {TXN_TYPE_LABEL[child.transaction_type]}{child.reference_number ? ` · Ref: ${child.reference_number}` : ""}</span>
-                      <strong>{fmt(child.amount)}</strong>
+                  {children.length > 0 && (
+                    <div style={{ marginTop:"8px",paddingTop:"8px",borderTop:"1px dashed #F1F5F9" }}>
+                      {children.map(c => {
+                        const isAutoLogged = (c.notes || "").startsWith("Auto-logged:");
+                        const label = c.status !== "CONFIRMED"
+                          ? c.status.charAt(0) + c.status.slice(1).toLowerCase()
+                          : isAutoLogged
+                            ? "Auto-settled"
+                            : (c.transaction_type === "CASH_REFUND" ? "Refund logged" : "Payment logged");
+                        return (
+                          <div key={c.transaction_id} style={{ display:"flex",justifyContent:"space-between",fontSize:"11px",color: c.status !== "CONFIRMED" ? "#94A3B8" : hasPartialPayment ? "#D97706" : "#16A34A", marginTop:"2px" }}>
+                            <span>
+                              ↳ {label}: {TXN_TYPE_LABEL[c.transaction_type]}
+                              {c.reference_number ? ` · Ref: ${c.reference_number}` : ""}
+                            </span>
+                            <strong>{fmt(c.amount)}</strong>
+                          </div>
+                        );
+                      })}
+                      {hasPartialPayment && (
+                        <div style={{ display:"flex",justifyContent:"space-between",fontSize:"11px",color:"#D97706",fontWeight:700,marginTop:"4px" }}>
+                          <span>Total paid so far</span>
+                          <strong>{fmt(t.amount_paid)} of {fmt(t.amount)}</strong>
+                        </div>
+                      )}
                     </div>
                   )}
                   </div>
@@ -1272,7 +1452,7 @@ export default function DealersPage() {
                   {d.pending_count > 0 && <Badge bg="#FEF3C7" color="#92400E">{d.pending_count} pending</Badge>}
                 </div>
                 <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center" }}>
-                  <Badge bg="#EDE9FE" color="#5B21B6">{DEALS_IN_LABEL[d.deals_in]}</Badge>
+                  <Badge bg="#EDE9FE" color="#5B21B6">{dealsInLabel(d.deals_in)}</Badge>
                   <div style={{ textAlign:"right" }}>
                     <div style={{ fontSize:"15px",fontWeight:800,color: d.balance===0 ? "#0F172A" : owedByUs ? "#EA580C" : "#16A34A" }}>
                       {fmt(Math.abs(d.balance))}

@@ -5,6 +5,7 @@
 // (route, dosage form, strength, prescription linkage).
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { flattenFormError } from "../../../utils/formErrors";
 import {
   getGeneralItems, createGeneralItem, updateGeneralItem,
   getGeneralItemBatches, createGeneralItemBatch, returnGeneralItemToProvider,
@@ -83,7 +84,7 @@ function ItemModal({ item, onSave, onClose }) {
       if (isEdit) await updateGeneralItem(item.item_id, form);
       else await createGeneralItem(form);
       onSave();
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(flattenFormError(e)); }
     finally { setSaving(false); }
   };
 
@@ -197,7 +198,7 @@ function BatchModal({ item, onSave, onClose }) {
         ...(form.dealer_id ? { dealer_id: parseInt(form.dealer_id, 10) } : {}),
       });
       onSave();
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(flattenFormError(e)); }
     finally { setSaving(false); }
   };
 
@@ -316,7 +317,7 @@ function ReturnModal({ item, batch, onSave, onClose }) {
         ...(form.dealer_id ? { dealer_id: parseInt(form.dealer_id, 10) } : {}),
       });
       onSave();
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(flattenFormError(e)); }
     finally { setSaving(false); }
   };
 
@@ -403,6 +404,24 @@ function ReturnModal({ item, batch, onSave, onClose }) {
   );
 }
 
+// ✅ NEW: full status badge — handles PENDING_APPROVAL and REJECTED
+// statuses added in pharmacist/migrations/0002.
+function GeneralBatchStatusBadge({ status }) {
+  const MAP = {
+    ACTIVE:           { bg: "#F0FDF4", color: "#15803D", label: "Active" },
+    DEPLETED:         { bg: "#F3E8FF", color: "#7C3AED", label: "Depleted" },
+    EXPIRED:          { bg: "#FEF2F2", color: "#B91C1C", label: "Expired" },
+    PENDING_APPROVAL: { bg: "#FFFBEB", color: "#B45309", label: "⏳ Pending Approval" },
+    REJECTED:         { bg: "#FEF2F2", color: "#B91C1C", label: "✕ Rejected" },
+  };
+  const s = MAP[status] || { bg: "#F1F5F9", color: "#64748B", label: status };
+  return (
+    <span style={{ padding: "2px 7px", borderRadius: 12, fontSize: 10, fontWeight: 700, background: s.bg, color: s.color, whiteSpace: "nowrap" }}>
+      {s.label}
+    </span>
+  );
+}
+
 function BatchesPanel({ item, batches, onReturn }) {
   const active = batches.filter(b => b.general_item === item.item_id);
   const today = new Date().toISOString().split("T")[0];
@@ -430,7 +449,7 @@ function BatchesPanel({ item, batches, onReturn }) {
                   {b.expiry_date ? new Date(b.expiry_date).toLocaleDateString("en-IN") : "—"}
                 </span>
                 <div style={{ textAlign: "center" }}>
-                  <span style={{ padding: "2px 7px", borderRadius: 12, fontSize: 10, fontWeight: 700, background: b.status === "ACTIVE" ? "#F0FDF4" : "#FEF2F2", color: b.status === "ACTIVE" ? "#15803D" : "#B91C1C" }}>{b.status}</span>
+                  <GeneralBatchStatusBadge status={b.status} />
                 </div>
                 <div style={{ textAlign: "right" }}>
                   {b.quantity > 0 && (
@@ -540,13 +559,16 @@ export default function GeneralItemsPage() {
       if (category) params.category = category;
       const [itemData, batchData] = await Promise.all([
         getGeneralItems({ ...params, show_inactive: true }),
-        getGeneralItemBatches({ status: "ACTIVE" }),
+        // ✅ FIX: also fetch PENDING_APPROVAL batches so the pharmacist
+        // can see dealer-linked stock awaiting manager sign-off. REJECTED
+        // batches are excluded — they've been zeroed out and returned.
+        getGeneralItemBatches({ status: "ACTIVE,PENDING_APPROVAL" }),
       ]);
       let itemList = Array.isArray(itemData) ? itemData : (itemData?.results ?? []);
       if (inStock) itemList = itemList.filter(i => (i.total_stock ?? 0) > 0);
       setItems(itemList);
       setBatches(Array.isArray(batchData) ? batchData : (batchData?.results ?? []));
-    } catch (e) { showToast(String(e), false); }
+    } catch (e) { showToast(flattenFormError(e), false); }
     finally { setLoading(false); }
   }, [debouncedSearch, category, inStock]);
 

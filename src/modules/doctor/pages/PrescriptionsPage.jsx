@@ -56,7 +56,7 @@ const MEAL_TIMING_OPTS = ["", "BEFORE_MEALS", "WITH_MEALS", "AFTER_MEALS"];
 
 const ROUTE_OPTS = ["ORAL", "IV", "IM", "SC", "TOPICAL", "NASAL", "RECTAL", "OTHER"];
 
-const PRN_REASON_OPTS = ["FEVER", "PAIN", "ALLERGY", "COUGH", "OTHER"];
+const PRN_REASON_OPTS = ["FEVER", "PAIN", "ALLERGY", "COUGH", "NAUSEA", "OTHER"];
 
 const FREQ_LABELS = {
   OD: "Once Daily", BD: "Twice Daily", TDS: "Three Times Daily",
@@ -74,7 +74,7 @@ const ROUTE_LABELS = {
 };
 
 const PRN_REASON_LABELS = {
-  FEVER: "Fever", PAIN: "Pain", ALLERGY: "Allergy", COUGH: "Cough", OTHER: "Other",
+  FEVER: "Fever", PAIN: "Pain", ALLERGY: "Allergy", COUGH: "Cough", NAUSEA: "Nausea/Vomiting", OTHER: "Other",
 };
 
 // Doses per day for quantity calculation (SOS returns null → manual entry)

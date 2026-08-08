@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef, Fragment } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { getBillDetail } from "../api/pharmacistApi";
+import { flattenFormError } from "../../../utils/formErrors";
 
 const G = "#8B5CF6";
 
@@ -39,7 +40,7 @@ export default function PrintBillPage() {
   useEffect(() => {
     getBillDetail(billId)
       .then(setBill)
-      .catch(e => setError(String(e)))
+      .catch(e => setError(flattenFormError(e)))
       .finally(() => setLoading(false));
   }, [billId]);
 
@@ -63,7 +64,25 @@ export default function PrintBillPage() {
   );
 
   const items      = bill.medicine_items   || [];
-  const procedures = bill.procedure_items  || [];
+
+  // Merge duplicate procedure rows (same procedure, or same manual
+  // description + rate) into one line with a combined quantity, so a
+  // procedure added more than once shows as a single row instead of
+  // repeating with quantity 1 each time.
+  const rawProcedures = bill.procedure_items || [];
+  const procedureMap = new Map();
+  rawProcedures.forEach(p => {
+    const key = p.procedure ? `p-${p.procedure}` : `m-${(p.procedure_name || "").trim().toLowerCase()}-${p.unit_charge}`;
+    const existing = procedureMap.get(key);
+    if (existing) {
+      existing.quantity += p.quantity;
+      existing.item_total = parseFloat(existing.item_total || 0) + parseFloat(p.item_total || 0);
+    } else {
+      procedureMap.set(key, { ...p });
+    }
+  });
+  const procedures = Array.from(procedureMap.values());
+  const general    = bill.general_items || [];
   const paidAt     = bill.updated_at ? new Date(bill.updated_at).toLocaleString("en-IN", { day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit" }) : "—";
 
   return (
@@ -93,7 +112,6 @@ export default function PrintBillPage() {
           {[
             ["Bill No.",      bill.bill_number],
             ["Patient",       (bill.patient_info?.name || bill.patient_name || "—") + (bill.patient_info?.type === 'walk-in' ? " (Walk-in)" : "")],
-            ["Age / Gender",  [bill.patient_info?.age != null ? `${bill.patient_info.age} yrs` : null, bill.patient_info?.gender].filter(Boolean).join(" · ") || "—"],
             ["Payment",       bill.payment_method + (bill.upi_reference ? ` · ${bill.upi_reference}` : "")],
             ["Paid at",       paidAt],
           ].map(([label, value]) => (
@@ -178,6 +196,35 @@ export default function PrintBillPage() {
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#475569" }}>{p.quantity}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", color:"#475569" }}>₹{parseFloat(p.unit_charge||0).toFixed(2)}</td>
                     <td style={{ padding:"8px 10px", textAlign:"right", fontWeight:600, color:"#0F172A" }}>₹{parseFloat(p.item_total||0).toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* General items */}
+        {general.length > 0 && (
+          <div style={{ marginBottom:16 }}>
+            <p style={{ fontSize:11, fontWeight:700, color:"#94A3B8", textTransform:"uppercase", letterSpacing:"0.5px", margin:"0 0 8px" }}>General Items</p>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead>
+                <tr style={{ background:"#F8FAFC" }}>
+                  {["Item","Qty","Rate","Total"].map(h => (
+                    <th key={h} style={{ padding:"7px 10px", textAlign: h === "Item" ? "left" : "right", fontSize:11, fontWeight:700, color:"#64748B", borderBottom:"1px solid #E5E7EB" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {general.map((g, i) => (
+                  <tr key={g.item_id} style={{ borderBottom: i < general.length-1 ? "1px solid #F8FAFC" : "none" }}>
+                    <td style={{ padding:"8px 10px", fontWeight:500, color:"#0F172A" }}>
+                      {g.item_name}
+                      {g.is_dispensed && <span style={{ marginLeft:6, fontSize:10, color:"#15803D", fontWeight:700 }}>✓ dispensed</span>}
+                    </td>
+                    <td style={{ padding:"8px 10px", textAlign:"right", color:"#475569" }}>{g.quantity}</td>
+                    <td style={{ padding:"8px 10px", textAlign:"right", color:"#475569" }}>₹{parseFloat(g.unit_mrp||0).toFixed(2)}</td>
+                    <td style={{ padding:"8px 10px", textAlign:"right", fontWeight:600, color:"#0F172A" }}>₹{parseFloat(g.item_total||0).toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>

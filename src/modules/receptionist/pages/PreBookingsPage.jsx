@@ -10,13 +10,13 @@ import {
   getPrebookings,
   createPrebooking,
   cancelPrebooking,
-  payPrebooking,
   getPatients,
   getDoctors,
   checkFollowUp,
   toArray,
 } from "../api/receptionApi";
 import ConvertDialog from "../components/ConvertDialog";
+import ConfirmDialog from "../../../components/shared/ConfirmDialog";
 
 const G       = "#16A34A";
 const LIGHT_G = "#DCFCE7";
@@ -35,6 +35,25 @@ const ICONS = {
   close:    "M18 6 6 18 M6 6l12 12",
   phone:    "M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.127.96.362 1.903.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.338 1.85.573 2.81.7A2 2 0 0 1 22 16.92z",
   walk:     "M13 4a2 2 0 1 1 0 4 2 2 0 0 1 0-4z M15 8l-3 3 2 2-1 6 M12 11l-3 2 1 6 M8 13l-3 1",
+  globe:    "M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20z M2 12h20 M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z",
+};
+
+/* Booking source — CALL/WALKIN are entered by staff; WEBSITE is a
+   patient-initiated request from the public site and needs a visibly
+   different treatment so reception doesn't mistake it for a walk-in. */
+const BookingModeTag = ({ mode }) => {
+  if (mode === "WEBSITE") {
+    return (
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", fontSize: "12px", fontWeight: 600, color: "#7C3AED", background: "#F5F3FF", padding: "3px 9px", borderRadius: "20px" }}>
+        <Ico d={ICONS.globe} size={12} color="#7C3AED" /> Website
+      </span>
+    );
+  }
+  return (
+    <span style={{ fontSize: "12px", color: "#475569" }}>
+      {mode === "CALL" ? "Call-in" : "Walk-in"}
+    </span>
+  );
 };
 
 const StatusBadge = ({ status }) => {
@@ -52,17 +71,31 @@ const StatusBadge = ({ status }) => {
   );
 };
 
-const PayBadge = ({ status }) => (
-  <span style={{
-    display: "inline-flex", alignItems: "center", gap: "5px",
-    padding: "3px 10px", borderRadius: "20px", fontSize: "11px", fontWeight: 600,
-    background: status === "PAID" ? LIGHT_G : "#FEF3C7",
-    color:      status === "PAID" ? "#15803D" : AMBER,
-  }}>
-    <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: status === "PAID" ? G : "#F59E0B" }} />
-    {status === "PAID" ? "Paid" : "Pending"}
-  </span>
-);
+const PayBadge = ({ status, inactive }) => {
+  if (inactive) {
+    return (
+      <span style={{
+        display: "inline-flex", alignItems: "center", gap: "5px",
+        padding: "3px 10px", borderRadius: "20px", fontSize: "11px", fontWeight: 600,
+        background: "#F1F5F9", color: "#94A3B8",
+      }}>
+        <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#CBD5E1" }} />
+        —
+      </span>
+    );
+  }
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: "5px",
+      padding: "3px 10px", borderRadius: "20px", fontSize: "11px", fontWeight: 600,
+      background: status === "PAID" ? LIGHT_G : "#FEF3C7",
+      color:      status === "PAID" ? "#15803D" : AMBER,
+    }}>
+      <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: status === "PAID" ? G : "#F59E0B" }} />
+      {status === "PAID" ? "Paid" : "Pending"}
+    </span>
+  );
+};
 
 const inp = { padding: "9px 12px", borderRadius: "9px", border: "1.5px solid #E8EDF4", fontSize: "13px", color: "#1E293B", outline: "none", width: "100%", boxSizing: "border-box" };
 const label = { fontSize: "12px", fontWeight: 600, color: "#475569", marginBottom: "5px", display: "block" };
@@ -75,6 +108,7 @@ function NewPreBookingDialog({ patients, doctors, onClose, onCreated }) {
   const [selectedPatient, setSelectedPatient] = useState(null);
   const [newPatient, setNewPatient] = useState({ name: "", phone: "", gender: "", age: "" });
   const [docKey, setDocKey] = useState(""); // `${doctor_type}-${id}`
+  const [docSearch, setDocSearch] = useState(""); // free-text filter for the doctor picker, by name or specialty
   const [requestedDate, setRequestedDate] = useState("");
   const [requestedTime, setRequestedTime] = useState("");
   const [fee, setFee] = useState("");
@@ -99,10 +133,18 @@ function NewPreBookingDialog({ patients, doctors, onClose, onCreated }) {
       || (p.mrd_number ?? "").toLowerCase().includes(q) || (p.phone ?? "").includes(q);
   }).slice(0, 8);
 
+  // Matches on doctor name OR specialty, so reception can find "Dr. Amal"
+  // just as easily as "Orthopedics".
+  const filtDoc = doctors.filter(d => {
+    const q = docSearch.toLowerCase();
+    return !q || (d.full_name ?? "").toLowerCase().includes(q) || (d.specialty_name ?? "").toLowerCase().includes(q);
+  }).slice(0, 8);
+
   const selectedDoctor = doctors.find(d => `${d.doctor_type}-${d.id}` === docKey) ?? null;
 
   const handlePickDoctor = (key) => {
     setDocKey(key);
+    setDocSearch("");
     const d = doctors.find(dd => `${dd.doctor_type}-${dd.id}` === key);
     // A locked-in free revisit stays ₹0 even after picking a doctor —
     // only auto-fill the fee from the doctor's rate for a NEW booking.
@@ -110,8 +152,10 @@ function NewPreBookingDialog({ patients, doctors, onClose, onCreated }) {
   };
 
   // Whenever an existing patient is (re)selected, check whether they're
-  // inside their free-revisit window and default consultType accordingly
-  // — same behavior as the Billing page's patient picker.
+  // inside their free-revisit window so the "Free Revisit" toggle can be
+  // enabled — but don't auto-select it. Consultation type stays NEW by
+  // default; it only becomes REVISIT if reception explicitly taps that
+  // button, same as the Convert-to-Bill dialog.
   const handleSelectPatient = (p) => {
     setSelectedPatient(p);
     setPatSearch("");
@@ -123,10 +167,6 @@ function NewPreBookingDialog({ patients, doctors, onClose, onCreated }) {
       .then(res => {
         setRevisitEligible(!!res.is_revisit_eligible);
         setRevisitMessage(res.message || "");
-        if (res.is_revisit_eligible) {
-          setConsultType("REVISIT");
-          setFee("0");
-        }
       })
       .catch(() => { setRevisitEligible(false); setRevisitMessage(""); })
       .finally(() => setRevisitChecking(false));
@@ -306,17 +346,31 @@ function NewPreBookingDialog({ patients, doctors, onClose, onCreated }) {
           </div>
         )}
 
-        {/* Doctor select */}
-        <div style={{ marginBottom: "16px" }}>
+        {/* Doctor select — searchable by name or specialty, same pattern as the patient picker above */}
+        <div style={{ marginBottom: "16px", position: "relative" }}>
           <label style={label}>Doctor</label>
-          <select style={inp} value={docKey} onChange={e => handlePickDoctor(e.target.value)}>
-            <option value="">Select a doctor</option>
-            {doctors.map(d => (
-              <option key={`${d.doctor_type}-${d.id}`} value={`${d.doctor_type}-${d.id}`}>
-                {d.full_name}{d.specialization ? ` — ${d.specialization}` : ""}{d.doctor_type === "guest" ? " (Guest)" : ""}
-              </option>
-            ))}
-          </select>
+          <input style={inp}
+            value={selectedDoctor ? `${selectedDoctor.full_name}${selectedDoctor.specialty_name ? ` — ${selectedDoctor.specialty_name}` : ""}${selectedDoctor.doctor_type === "guest" ? " (Guest)" : ""}` : docSearch}
+            onChange={e => { setDocSearch(e.target.value); setDocKey(""); }}
+            placeholder="Search by name or specialty..." />
+          {!selectedDoctor && docSearch && filtDoc.length > 0 && (
+            <div style={{ position: "absolute", zIndex: 10, top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #E8EDF4", borderRadius: "10px", marginTop: "4px", maxHeight: "220px", overflowY: "auto", boxShadow: "0 6px 20px rgba(0,0,0,0.08)" }}>
+              {filtDoc.map(d => (
+                <div key={`${d.doctor_type}-${d.id}`} onClick={() => handlePickDoctor(`${d.doctor_type}-${d.id}`)}
+                  style={{ padding: "10px 14px", cursor: "pointer", borderBottom: "1px solid #F8FAFC" }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#F8FAFC"}
+                  onMouseLeave={e => e.currentTarget.style.background = "#fff"}>
+                  <div style={{ fontSize: "13px", fontWeight: 600, color: "#1E293B" }}>{d.full_name}{d.doctor_type === "guest" ? " (Guest)" : ""}</div>
+                  <div style={{ fontSize: "11px", color: "#94A3B8" }}>{d.specialty_name || "—"}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {!selectedDoctor && docSearch && filtDoc.length === 0 && (
+            <div style={{ position: "absolute", zIndex: 10, top: "100%", left: 0, right: 0, background: "#fff", border: "1px solid #E8EDF4", borderRadius: "10px", marginTop: "4px", padding: "10px 14px", fontSize: "12.5px", color: "#94A3B8", boxShadow: "0 6px 20px rgba(0,0,0,0.08)" }}>
+              No doctors match "{docSearch}"
+            </div>
+          )}
         </div>
 
         {/* Date / time */}
@@ -371,62 +425,6 @@ function NewPreBookingDialog({ patients, doctors, onClose, onCreated }) {
     </div>
   );
 }
-/* ─── Collect payment on a "pay at visit" prebooking ───────────────── */
-function PayPrebookingDialog({ booking, onClose, onPaid }) {
-  const [paymentMethod, setPaymentMethod] = useState("CASH");
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState("");
-
-  const handleConfirm = async () => {
-    setErr("");
-    setSaving(true);
-    try {
-      await payPrebooking(booking.prebooking_id, { payment_method: paymentMethod });
-      onPaid?.();
-      onClose();
-    } catch (e) {
-      const data = e.response?.data;
-      setErr(data ? (data.detail || Object.values(data).flat().join(" ")) : (e.message || "Failed to record payment."));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "16px" }}>
-      <div style={{ background: "#fff", borderRadius: "16px", padding: "24px", maxWidth: "380px", width: "100%" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-          <h2 style={{ fontSize: "17px", fontWeight: 700, color: "#0F172A", margin: 0 }}>Collect Payment</h2>
-          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer", color: "#64748B" }}>
-            <Ico d={ICONS.close} size={18} />
-          </button>
-        </div>
-        <p style={{ fontSize: "13px", color: "#64748B", margin: "0 0 18px" }}>
-          {booking.patient_name} · ₹{parseFloat(booking.consultation_fee ?? 0).toLocaleString("en-IN")}
-        </p>
-
-        <label style={label}>Payment method</label>
-        <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
-          {["CASH", "UPI"].map(m => (
-            <button key={m} type="button" onClick={() => setPaymentMethod(m)}
-              style={{ flex: 1, padding: "10px", borderRadius: "10px", border: paymentMethod === m ? `1.5px solid ${G}` : "1.5px solid #E8EDF4", background: paymentMethod === m ? LIGHT_G : "#fff", color: paymentMethod === m ? G : "#64748B", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
-              {m === "CASH" ? "Cash" : "UPI"}
-            </button>
-          ))}
-        </div>
-
-        {err && (
-          <div style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: "#DC2626", borderRadius: "9px", padding: "10px 12px", marginBottom: "14px", fontSize: "13px" }}>{err}</div>
-        )}
-
-        <button onClick={handleConfirm} disabled={saving}
-          style={{ width: "100%", padding: "12px", borderRadius: "10px", border: "none", background: saving ? "#D1D5DB" : G, color: "#fff", fontSize: "14px", fontWeight: 700, cursor: saving ? "not-allowed" : "pointer" }}>
-          {saving ? "Recording…" : "Mark as Paid"}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 
 
@@ -450,12 +448,17 @@ export default function PreBookingsPage() {
   const [doctors, setDoctors]   = useState([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState("");
-  const [dateFilter, setDateFilter] = useState(todayISO());
+  // No date filter by default — show every booking, latest date/time
+  // first (the backend already orders by -requested_date, -requested_time).
+  // Reception can still narrow to a single day with the date picker below.
+  const [dateFilter, setDateFilter] = useState("");
   const [doctorFilter, setDoctorFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [modeFilter, setModeFilter] = useState("");
   const [showNew, setShowNew] = useState(false);
   const [convertTarget, setConvertTarget] = useState(null);
-  const [payTarget, setPayTarget] = useState(null);
+  const [cancelTarget, setCancelTarget] = useState(null);
+  const [cancelling, setCancelling] = useState(false);
   const [toast, setToast] = useState(null);
 
   const showToast = (msg, ok) => { setToast({ msg, ok }); setTimeout(() => setToast(null), 3000); };
@@ -466,11 +469,12 @@ export default function PreBookingsPage() {
     if (dateFilter) params.date = dateFilter;
     if (doctorFilter) params.doctor_id = doctorFilter;
     if (statusFilter) params.status = statusFilter;
+    if (modeFilter) params.booking_mode = modeFilter;
     getPrebookings(params)
       .then(d => setBookings(toArray(d)))
       .catch(() => setError("Failed to load prebookings."))
       .finally(() => setLoading(false));
-  }, [dateFilter, doctorFilter, statusFilter]);
+  }, [dateFilter, doctorFilter, statusFilter, modeFilter]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -481,14 +485,21 @@ export default function PreBookingsPage() {
     });
   }, []);
 
-  const handleCancel = async (booking) => {
-    if (!window.confirm(`Cancel the prebooking for ${booking.patient_name}?`)) return;
+  const handleCancel = (booking) => setCancelTarget(booking);
+
+  const confirmCancel = async () => {
+    if (!cancelTarget) return;
+    setCancelling(true);
     try {
-      await cancelPrebooking(booking.prebooking_id);
+      await cancelPrebooking(cancelTarget.prebooking_id);
       showToast("Prebooking cancelled.", true);
+      setCancelTarget(null);
       load();
     } catch (e) {
       showToast(e.response?.data?.detail || e.message || "Failed to cancel.", false);
+      setCancelTarget(null);
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -540,8 +551,14 @@ export default function PreBookingsPage() {
             <option value="CANCELLED">Cancelled</option>
             <option value="NO_SHOW">No Show</option>
           </select>
-          {(dateFilter || doctorFilter || statusFilter) && (
-            <button onClick={() => { setDateFilter(""); setDoctorFilter(""); setStatusFilter(""); }}
+          <select value={modeFilter} onChange={e => setModeFilter(e.target.value)} style={selInp} title="Filter by booking source">
+            <option value="">All sources</option>
+            <option value="WEBSITE">Website</option>
+            <option value="CALL">Call-in</option>
+            <option value="WALKIN">Walk-in</option>
+          </select>
+          {(dateFilter || doctorFilter || statusFilter || modeFilter) && (
+            <button onClick={() => { setDateFilter(""); setDoctorFilter(""); setStatusFilter(""); setModeFilter(""); }}
               style={{ padding: "8px 14px", borderRadius: "9px", border: "1.5px solid #FECACA", background: "#FEF2F2", color: "#DC2626", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>
               Clear filters
             </button>
@@ -574,23 +591,17 @@ export default function PreBookingsPage() {
                 <div style={{ fontSize: "13.5px", fontWeight: 600, color: "#1E293B" }}>{b.patient_name}</div>
                 <div style={{ fontSize: "11px", color: "#94A3B8" }}>₹{parseFloat(b.consultation_fee ?? 0).toLocaleString("en-IN")}</div>
               </div>
-              <span style={{ fontSize: "12px", color: "#475569" }}>{b.booking_mode === "CALL" ? "Call-in" : "Walk-in"}</span>
+              <BookingModeTag mode={b.booking_mode} />
               <span style={{ fontSize: "13px", color: "#475569" }}>{b.doctor_display_name ? `Dr. ${b.doctor_display_name}` : "—"}</span>
               <span style={{ fontSize: "12.5px", color: "#475569" }}>
                 {b.requested_date ? new Date(b.requested_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : "—"}
                 {b.requested_time ? ` · ${b.requested_time.slice(0, 5)}` : ""}
               </span>
               <StatusBadge status={b.status} />
-              <PayBadge status={b.payment_status} />
+              <PayBadge status={b.payment_status} inactive={b.status === "CANCELLED" || b.status === "NO_SHOW"} />
               <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
                 {b.status !== "CONVERTED" && b.status !== "CANCELLED" && b.status !== "NO_SHOW" && (
                   <>
-                    {b.payment_status !== "PAID" && (
-                      <button onClick={() => setPayTarget(b)}
-                        style={{ padding: "5px 10px", borderRadius: "6px", border: "1px solid #FDE68A", background: "#FFFBEB", color: AMBER, fontSize: "11px", fontWeight: 600, cursor: "pointer" }}>
-                        Pay
-                      </button>
-                    )}
                     <button onClick={() => setConvertTarget(b)}
                       style={{ padding: "5px 10px", borderRadius: "6px", border: "1px solid #E8EDF4", background: G, color: "#fff", fontSize: "11px", fontWeight: 600, cursor: "pointer" }}>
                       Convert to Bill
@@ -619,8 +630,17 @@ export default function PreBookingsPage() {
       {convertTarget && (
         <ConvertDialog booking={convertTarget} doctors={doctors} onClose={() => setConvertTarget(null)} onConverted={() => { showToast("Converted to bill.", true); load(); }} />
       )}
-      {payTarget && (
-        <PayPrebookingDialog booking={payTarget} onClose={() => setPayTarget(null)} onPaid={() => { showToast("Payment recorded.", true); load(); }} />
+      {cancelTarget && (
+        <ConfirmDialog
+          title="Cancel prebooking?"
+          message={`Cancel the prebooking for ${cancelTarget.patient_name}?`}
+          confirmLabel="Yes, cancel it"
+          cancelLabel="No, keep it"
+          danger
+          loading={cancelling}
+          onConfirm={confirmCancel}
+          onClose={() => !cancelling && setCancelTarget(null)}
+        />
       )}
 
       <style>{`@keyframes shimmer{0%,100%{opacity:1}50%{opacity:.4}}`}</style>

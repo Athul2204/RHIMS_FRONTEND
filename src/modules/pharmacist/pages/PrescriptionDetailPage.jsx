@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { getBillDetail } from "../api/pharmacistApi";
+import { flattenFormError } from "../../../utils/formErrors";
 
 const G = "#8B5CF6";
 
@@ -71,7 +72,7 @@ export default function PrescriptionDetailPage() {
     if (!billId) { setError("No bill ID provided."); setLoading(false); return; }
     getBillDetail(billId)
       .then(setBill)
-      .catch(e => setError(String(e)))
+      .catch(e => setError(flattenFormError(e)))
       .finally(() => setLoading(false));
   }, [billId]);
 
@@ -98,7 +99,23 @@ export default function PrescriptionDetailPage() {
 
   const st = BILL_STATUS[bill.bill_status] || { label: bill.bill_status, bg: "#F1F5F9", color: "#64748B" };
   const medItems = bill.medicine_items || [];
-  const procItems = bill.procedure_items || [];
+
+  // Merge duplicate procedure rows (same procedure, or same manual
+  // description + rate) into one line with a combined quantity.
+  const rawProcItems = bill.procedure_items || [];
+  const procItemMap = new Map();
+  rawProcItems.forEach(p => {
+    const key = p.procedure ? `p-${p.procedure}` : `m-${(p.procedure_name || "").trim().toLowerCase()}-${p.unit_charge}`;
+    const existing = procItemMap.get(key);
+    if (existing) {
+      existing.quantity += p.quantity;
+      existing.item_total = parseFloat(existing.item_total || 0) + parseFloat(p.item_total || 0);
+    } else {
+      procItemMap.set(key, { ...p });
+    }
+  });
+  const procItems = Array.from(procItemMap.values());
+
   const totalMed = medItems.reduce((s, i) => s + parseFloat(i.item_total || 0), 0);
   const totalProc = procItems.reduce((s, i) => s + parseFloat(i.item_total || 0), 0);
 

@@ -6,6 +6,11 @@ import {
   getPharmacistList, createStaff, patchStaff,
   deactivateStaff, reactivateStaff, patchPharmacist,
 } from "../api/adminApi";
+import useBranchScope from "../hooks/useBranchScope";
+// Branch-awareness matches the DoctorsPage/StaffPage pattern (build spec
+// §2.3/§2.4): a group admin gets a Branch column + branch picker on the
+// form; a branch-scoped admin never sees either, and never has `branch`
+// sent in the payload (resolved automatically server-side).
 
 const G = "#8B5CF6"; // Pharmacist theme purple
 
@@ -29,6 +34,7 @@ const EMPTY = {
   role: "Pharmacist", phone: "", date_of_birth: "", qualification: "B.Pharm", 
   salary: "30000", joining_date: new Date().toISOString().split("T")[0], address: "",
   license_number: "",
+  branch: "",
 };
 
 const Modal = ({ title, children, onClose }) => (
@@ -55,6 +61,7 @@ const Field = ({ label, children, required }) => (
 const inp = { width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1px solid #E2E8F0", outline: "none", fontSize: "14px", boxSizing: "border-box" };
 
 export default function PharmacistsPage() {
+  const { isGroupAdmin, branches, selectedBranch, listParams } = useBranchScope();
   const [list, setList]             = useState([]);
   const [loading, setLoading]       = useState(true);
   const [error, setError]           = useState("");
@@ -71,9 +78,14 @@ export default function PharmacistsPage() {
   const [toast, showToast]        = useToast();
   const [editTarget, setEditTarget] = useState(null);
 
-  const load = useCallback((arg = "/administration/pharmacist/") => {
+  const load = useCallback((arg = null) => {
     setLoading(true);
-    getPharmacistList(arg)
+    // `arg` is a full next/prev pagination URL when paging, or null for a
+    // fresh load — in the fresh case, forward the group admin's branch
+    // filter (if any); omitted for "All branches" or a non-group-admin
+    // (the backend hard-scopes them regardless of what's sent).
+    const request = arg ?? listParams;
+    getPharmacistList(request)
       .then(d => {
         setList(d.results ?? []);
         setCount(d.count ?? 0);
@@ -83,7 +95,7 @@ export default function PharmacistsPage() {
       })
       .catch(() => setError("Failed to load pharmacists."))
       .finally(() => setLoading(false));
-  }, []);
+  }, [listParams]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -95,7 +107,14 @@ export default function PharmacistsPage() {
     return name.includes(q) || s.user?.email?.toLowerCase().includes(q) || s.staff_code?.toLowerCase().includes(q);
   });
 
-  const openAdd = () => { setForm(EMPTY); setFormError(""); setModal("add"); };
+  const openAdd = () => {
+    // Default (and see below: lock) the new record's branch to whatever
+    // is currently narrowed in the header switcher, so "viewing Madathara"
+    // can't silently create a record under Trivandrum.
+    setForm({ ...EMPTY, branch: selectedBranch ?? "" });
+    setFormError("");
+    setModal("add");
+  };
   const openEdit = (p) => {
     const s = p.staff ?? {};
     setEditTarget(p);
@@ -104,6 +123,7 @@ export default function PharmacistsPage() {
       role: "Pharmacist", phone: s.phone ?? "", date_of_birth: s.date_of_birth ?? "",
       qualification: s.qualification ?? "B.Pharm", salary: s.salary ?? "", joining_date: s.joining_date ?? "", address: s.address ?? "",
       license_number: p.license_number ?? "",
+      branch: s.branch ?? "",
     });
     setFormError(""); setModal("edit");
   };
@@ -125,6 +145,15 @@ export default function PharmacistsPage() {
 
       if (staffPayload.salary === "" || staffPayload.salary === null) delete staffPayload.salary;
       else staffPayload.salary = parseInt(staffPayload.salary, 10);
+
+      // Branch is only ever picked explicitly by a group admin — a
+      // branch-scoped admin's staff always belongs to their own branch,
+      // resolved automatically server-side.
+      if (!isGroupAdmin || !staffPayload.branch) {
+        delete staffPayload.branch;
+      } else {
+        staffPayload.branch = Number(staffPayload.branch);
+      }
 
       if (modal === "add") {
         const staffRes = await createStaff(staffPayload);
@@ -232,6 +261,14 @@ export default function PharmacistsPage() {
                   <div style={{ fontSize: "12px", color: "#64748B" }}><strong>License No:</strong> {p.license_number || "—"}</div>
                   <div style={{ fontSize: "12px", color: "#64748B" }}><strong>Qualification:</strong> {s.qualification}</div>
                   <div style={{ fontSize: "12px", color: "#64748B" }}><strong>Phone:</strong> {s.phone ?? "—"}</div>
+                  {isGroupAdmin && (
+                    <div style={{ fontSize: "12px", color: "#64748B" }}>
+                      <strong>Branch:</strong> {(() => {
+                        const b = branches.find(b => b.branch_id === s.branch);
+                        return b ? `${b.name} (${b.code})` : "—";
+                      })()}
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ display: "flex", gap: "8px", borderTop: "1px solid #F8FAFC", paddingTop: "12px" }}>
@@ -274,6 +311,21 @@ export default function PharmacistsPage() {
               <Field label="Salary (₹)"><input style={inp} type="number" value={form.salary} onChange={e => handleChange("salary", e.target.value)} /></Field>
               <Field label="Joining Date"><input style={inp} type="date" value={form.joining_date} onChange={e => handleChange("joining_date", e.target.value)} /></Field>
               <Field label="Date of Birth"><input style={inp} type="date" value={form.date_of_birth} onChange={e => handleChange("date_of_birth", e.target.value)} /></Field>
+              {isGroupAdmin && (
+                <Field label="Branch" required>
+                  {modal === "add" && selectedBranch ? (
+                    <div style={{ ...inp, display: "flex", alignItems: "center", justifyContent: "space-between", background: "#F8FAFC", color: "#475569" }}>
+                      <span>{branches.find(b => b.branch_id === selectedBranch)?.name ?? "Selected branch"}</span>
+                      <span style={{ fontSize: "11px", color: "#94A3B8" }}>locked to header selection</span>
+                    </div>
+                  ) : (
+                    <select style={{ ...inp, cursor: "pointer" }} value={form.branch} onChange={e => handleChange("branch", e.target.value)}>
+                      <option value="">— Select a branch —</option>
+                      {branches.map(b => <option key={b.branch_id} value={b.branch_id}>{b.name} ({b.code})</option>)}
+                    </select>
+                  )}
+                </Field>
+              )}
               <div style={{ gridColumn: "1/-1" }}><Field label="Address"><input style={inp} value={form.address} onChange={e => handleChange("address", e.target.value)} /></Field></div>
             </div>
           </div>

@@ -33,7 +33,6 @@ const label = {
 export default function ConvertDialog({ booking, doctors = [], onClose, onConverted }) {
   const [paymentMethod, setPaymentMethod] = useState("CASH");
   const [upiRef, setUpiRef] = useState("");
-  const [collectNow, setCollectNow] = useState(true);
   const [converting, setConverting] = useState(false);
   const [err, setErr] = useState("");
 
@@ -50,9 +49,19 @@ export default function ConvertDialog({ booking, doctors = [], onClose, onConver
       setRevisitChecking(true);
       checkFollowUp(booking.patient)
         .then(res => {
-          setRevisitEligible(!!res.is_revisit_eligible);
+          const eligible = !!res.is_revisit_eligible;
+          setRevisitEligible(eligible);
           setRevisitMessage(res.message || "");
-          if (res.is_revisit_eligible) {
+          // Default to whatever type the booking was actually made as —
+          // don't silently flip a "New Consultation" booking over to
+          // "Free Revisit" just because the patient still happens to be
+          // inside the revisit window at conversion time. The only time
+          // we fall back to NEW is if the booking itself was REVISIT but
+          // that window has since lapsed (same case the "Free Revisit"
+          // button's disabled state below already guards against) —
+          // reception can still switch types manually either way.
+          const bookedType = booking.consultation_type || "NEW";
+          if (bookedType === "REVISIT" && eligible) {
             setConsultType("REVISIT");
             setFee("0");
           } else {
@@ -85,7 +94,7 @@ export default function ConvertDialog({ booking, doctors = [], onClose, onConver
 
   const handleConvert = async () => {
     setErr("");
-    if (!alreadyPaid && collectNow && paymentMethod === "UPI" && !upiRef.trim()) {
+    if (!alreadyPaid && !isFreeConversion && paymentMethod === "UPI" && !upiRef.trim()) {
       setErr("UPI reference is required.");
       return;
     }
@@ -98,10 +107,23 @@ export default function ConvertDialog({ booking, doctors = [], onClose, onConver
     try {
       const payload = alreadyPaid
         ? {}
+        : isFreeConversion
+        ? {
+            // Nothing to collect — auto-settle so the booking doesn't sit
+            // around as "pending payment" for a ₹0 free revisit.
+            payment_method: "CASH",
+            collect_payment: true,
+            consultation_type: consultType,
+            consultation_fee: 0
+          }
         : {
+            // Converting always collects payment on the spot now — there's
+            // no more "leave it Pending" path here. A converted prebooking
+            // is created (and marked) Paid immediately with the chosen
+            // method, same as how a walk-in New Bill works.
             payment_method: paymentMethod,
-            collect_payment: collectNow,
-            ...(collectNow && paymentMethod === "UPI" && { upi_reference: upiRef.trim() }),
+            collect_payment: true,
+            ...(paymentMethod === "UPI" && { upi_reference: upiRef.trim() }),
             consultation_type: consultType,
             consultation_fee: consultType === "REVISIT" ? 0 : parseFloat(fee)
           };
@@ -118,6 +140,16 @@ export default function ConvertDialog({ booking, doctors = [], onClose, onConver
 
   // Lock fee to read-only for revisits, or for NEW consultations with registered doctors (fixed live rate validation)
   const isFeeReadOnly = alreadyPaid || consultType === "REVISIT" || (consultType === "NEW" && !!booking.doctor);
+
+  const inr = (n) => `₹${(Number.isFinite(n) ? n : 0).toLocaleString("en-IN")}`;
+  const consultationFeeNum = parseFloat(fee) || 0;
+  // REVISIT never carries a registration component, regardless of what the
+  // booking originally computed — mirrors ConsultationPreBooking.compute_registration_fee().
+  const registrationFee = consultType === "REVISIT" ? 0 : parseFloat(booking.pending_registration_fee ?? 0);
+  const totalDue = consultationFeeNum + registrationFee;
+  // Nothing to charge — e.g. a free revisit — so there's no payment to collect or method to pick.
+  const isFreeConversion = !alreadyPaid && totalDue === 0;
+
 
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "16px" }}>
@@ -185,32 +217,44 @@ export default function ConvertDialog({ booking, doctors = [], onClose, onConver
           )}
         </div>
 
+        {!alreadyPaid && registrationFee > 0 && (
+          <div style={{ background: "#F8FAFC", border: "1px solid #E8EDF4", borderRadius: "10px", padding: "12px 14px", marginBottom: "16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", color: "#475569", marginBottom: "6px" }}>
+              <span>Consultation fee</span>
+              <span>{inr(consultationFeeNum)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px", color: "#475569", marginBottom: "6px" }}>
+              <span>MRD registration fee <span style={{ color: "#94A3B8" }}>(new patient)</span></span>
+              <span>{inr(registrationFee)}</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "14px", fontWeight: 700, color: "#0F172A", marginTop: "8px", paddingTop: "8px", borderTop: "1px solid #E8EDF4" }}>
+              <span>Total due</span>
+              <span>{inr(totalDue)}</span>
+            </div>
+          </div>
+        )}
+
         {alreadyPaid ? (
           <div style={{ background: LIGHT_G, color: "#15803D", borderRadius: "9px", padding: "10px 12px", fontSize: "13px", marginBottom: "16px" }}>
             Already paid — the bill will be created as paid, no charge at the counter.
           </div>
+        ) : isFreeConversion ? (
+          <div style={{ background: LIGHT_G, color: "#15803D", borderRadius: "9px", padding: "10px 12px", fontSize: "13px", marginBottom: "16px" }}>
+            No charge for this visit — the bill will be created and marked paid automatically.
+          </div>
         ) : (
           <div style={{ marginBottom: "16px" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "13px", fontWeight: 600, color: "#0F172A", cursor: "pointer", marginBottom: "10px" }}>
-              <input type="checkbox" checked={collectNow} onChange={e => setCollectNow(e.target.checked)} />
-              Collect payment now
-            </label>
-            {collectNow ? (
-              <>
-                <label style={label}>Payment method</label>
-                <select style={inp} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
-                  <option value="CASH">Cash</option>
-                  <option value="UPI">UPI</option>
-                </select>
-                {paymentMethod === "UPI" && (
-                  <input style={{ ...inp, marginTop: "8px" }} placeholder="UPI reference number" value={upiRef} onChange={e => setUpiRef(e.target.value)} />
-                )}
-              </>
-            ) : (
-              <p style={{ fontSize: "12px", color: "#94A3B8", margin: 0 }}>
-                The bill will be created as Pending and can be marked paid later from the Billing page.
-              </p>
+            <label style={label}>Payment method</label>
+            <select style={inp} value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>
+              <option value="CASH">Cash</option>
+              <option value="UPI">UPI</option>
+            </select>
+            {paymentMethod === "UPI" && (
+              <input style={{ ...inp, marginTop: "8px" }} placeholder="UPI reference number" value={upiRef} onChange={e => setUpiRef(e.target.value)} />
             )}
+            <p style={{ fontSize: "11px", color: "#94A3B8", margin: "8px 0 0" }}>
+              Payment is collected now — the bill is created as Paid.
+            </p>
           </div>
         )}
 
@@ -222,7 +266,11 @@ export default function ConvertDialog({ booking, doctors = [], onClose, onConver
           <button onClick={onClose} style={{ flex: 1, padding: "11px", borderRadius: "9px", border: "1.5px solid #E8EDF4", background: "#fff", color: "#475569", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>Cancel</button>
           <button onClick={handleConvert} disabled={converting || revisitChecking}
             style={{ flex: 1, padding: "11px", borderRadius: "9px", border: "none", background: converting ? "#D1D5DB" : G, color: "#fff", fontSize: "13px", fontWeight: 700, cursor: (converting || revisitChecking) ? "not-allowed" : "pointer" }}>
-            {converting ? "Converting…" : "Convert"}
+            {converting
+              ? "Converting…"
+              : isFreeConversion
+              ? "Convert — Free"
+              : (!alreadyPaid ? `Convert — ${inr(totalDue)}` : "Convert")}
           </button>
         </div>
       </div>

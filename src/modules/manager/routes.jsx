@@ -7,8 +7,10 @@ import LeavePage            from "./pages/LeavePage";
 import SalaryPage           from "./pages/SalaryPage";
 import BillsPage            from "./pages/BillsPage";
 import ExpensesPage         from "./pages/ExpensesPage";
+import IncomePage           from "./pages/IncomePage";
 import DealersPage          from "./pages/DealersPage";
 import ProceduresPage       from "./pages/ProceduresPage";
+import WebsiteManagementPage from "./pages/WebsiteManagementPage";
 
 export default function ManagerRoutes() {
   return (
@@ -20,8 +22,10 @@ export default function ManagerRoutes() {
       <Route path="salary"          element={<SalaryPage />} />
       <Route path="bills"           element={<BillsPage />} />
       <Route path="expenses"        element={<ExpensesPage />} />
+      <Route path="income"          element={<IncomePage />} />
       <Route path="dealers"         element={<DealersPage />} />
       <Route path="procedures"      element={<ProceduresPage />} />
+      <Route path="website"         element={<WebsiteManagementPage />} />
       <Route path="*"               element={<Navigate to="/manager" replace />} />
     </Routes>
   );

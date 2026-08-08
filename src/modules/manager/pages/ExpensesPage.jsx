@@ -338,10 +338,30 @@ function ManualExpensesTab() {
 // ════════════════════════════════════════════════════════
 // Tab 2: Purchases & Refunds (new, read-only)
 // ════════════════════════════════════════════════════════
+// Keys match the `type` string the backend puts on each purchase/refund
+// row (see PurchasesAndRefundsView) — "Medicine" / "Supply" / "General Item".
 const TYPE_STYLE = {
-  "medicine": { bg:"#EDE9FE", text:"#5B21B6", icon:"💊", label:"Medicine" },
-  "supply":   { bg:"#F0FDF4", text:"#16A34A", icon:"📦", label:"Supply" },
+  "Medicine":     { bg:"#EDE9FE", text:"#5B21B6", icon:"💊", label:"Medicine" },
+  "Supply":       { bg:"#F0FDF4", text:"#16A34A", icon:"📦", label:"Supply" },
+  "General Item": { bg:"#FFF7ED", text:"#C2410C", icon:"🧴", label:"General Item" },
 };
+
+// Settlement status from the Dealers ledger reconciliation — see
+// _settlement_status_label on the backend. Kept as a small badge so a
+// partial payment/refund is visually distinct from a fully-settled one.
+const SETTLEMENT_BADGE = {
+  "Paid in full":        { bg:"#DCFCE7", text:"#166534" },
+  "Partially paid":      { bg:"#FEF3C7", text:"#92400E" },
+  "Due":                 { bg:"#FEE2E2", text:"#991B1B" },
+  "Pending review":      { bg:"#F1F5F9", text:"#64748B" },
+  "Rejected":            { bg:"#FEE2E2", text:"#991B1B" },
+  "N/A — no dealer linked": { bg:"#F1F5F9", text:"#94A3B8" },
+};
+function SettlementBadge({ status }) {
+  if (!status) return "—";
+  const s = SETTLEMENT_BADGE[status] || { bg:"#F1F5F9", text:"#64748B" };
+  return <span style={{ padding:"2px 9px",borderRadius:"20px",fontSize:"10.5px",fontWeight:700,background:s.bg,color:s.text,whiteSpace:"nowrap" }}>{status}</span>;
+}
 
 function PurchasesTab() {
   const today = new Date();
@@ -371,6 +391,15 @@ function PurchasesTab() {
   const refunds   = data?.refunds   || [];
   const totalPurchases = purchases.reduce((s, p) => s + Number(p.amount || 0), 0);
   const totalRefunds   = refunds.reduce((s, r) => s + Number(r.amount || 0), 0);
+  // ✅ FIX: previously only `amount` (full invoice/expected-refund value)
+  // was shown here, with no sign of how much had actually changed hands —
+  // a partial payment (e.g. ₹100 paid of a ₹150 purchase) looked
+  // identical to a fully-paid ₹150 purchase. These come reconciled from
+  // the Dealers ledger's confirmed PAYMENT/CASH_REFUND legs (see
+  // _dealer_settlement_map on the backend), same source the Dealers page
+  // itself uses, so the two screens can no longer disagree.
+  const totalPurchasesDue      = data?.purchases_due_total      ?? purchases.reduce((s, p) => s + Number(p.amount_due || 0), 0);
+  const totalRefundsPending    = data?.refunds_pending_total    ?? refunds.reduce((s, r) => s + Number(r.amount_pending || 0), 0);
 
   return (
     <div>
@@ -398,7 +427,7 @@ function PurchasesTab() {
           <div>
             <label style={{ display:"block",fontSize:"11px",fontWeight:600,color:"#374151",marginBottom:"4px",textTransform:"uppercase" }}>Type</label>
             <div style={{ display:"flex",gap:"4px" }}>
-              {[["","All"],["medicine","💊 Medicine"],["supply","📦 Supply"]].map(([v,l]) => (
+              {[["","All"],["medicine","💊 Medicine"],["supply","📦 Supply"],["general_item","🧴 General Item"]].map(([v,l]) => (
                 <button key={v} onClick={() => setTypeFilter(v)}
                   style={{ padding:"7px 12px",borderRadius:"8px",fontSize:"12px",fontWeight:600,border:typeFilter===v?"none":"1px solid #E8EDF4",background:typeFilter===v?ACCENT:"#fff",color:typeFilter===v?"#fff":"#64748B",cursor:"pointer" }}>
                   {l}
@@ -415,27 +444,40 @@ function PurchasesTab() {
         <div style={{ background:"#fff",borderRadius:"12px",padding:"18px 22px",border:"2px solid #FECACA" }}>
           <p style={{ fontSize:"11px",color:"#94A3B8",fontWeight:600,margin:"0 0 6px",textTransform:"uppercase" }}>Total Purchases</p>
           <p style={{ fontSize:"22px",fontWeight:800,color:"#EF4444",margin:"0 0 4px" }}>{fmt(totalPurchases)}</p>
-          <p style={{ fontSize:"12px",color:"#94A3B8",margin:0 }}>{purchases.length} records</p>
+          <p style={{ fontSize:"12px",color:"#94A3B8",margin:0 }}>{purchases.length} records · full invoice value</p>
+        </div>
+        <div style={{ background:"#fff",borderRadius:"12px",padding:"18px 22px",border:"2px solid #FDE68A" }}>
+          <p style={{ fontSize:"11px",color:"#94A3B8",fontWeight:600,margin:"0 0 6px",textTransform:"uppercase" }}>Still Due To Dealers</p>
+          <p style={{ fontSize:"22px",fontWeight:800,color:"#D97706",margin:"0 0 4px" }}>{fmt(totalPurchasesDue)}</p>
+          <p style={{ fontSize:"12px",color:"#94A3B8",margin:0 }}>unpaid/partially-paid purchases</p>
         </div>
         <div style={{ background:"#fff",borderRadius:"12px",padding:"18px 22px",border:"2px solid #99F6E4" }}>
           <p style={{ fontSize:"11px",color:"#94A3B8",fontWeight:600,margin:"0 0 6px",textTransform:"uppercase" }}>Total Refunds</p>
           <p style={{ fontSize:"22px",fontWeight:800,color:"#0D9488",margin:"0 0 4px" }}>{fmt(totalRefunds)}</p>
-          <p style={{ fontSize:"12px",color:"#94A3B8",margin:0 }}>{refunds.length} records</p>
+          <p style={{ fontSize:"12px",color:"#94A3B8",margin:0 }}>{refunds.length} records · expected value</p>
         </div>
         <div style={{ background:"#fff",borderRadius:"12px",padding:"18px 22px",border:"1px solid #E8EDF4" }}>
           <p style={{ fontSize:"11px",color:"#94A3B8",fontWeight:600,margin:"0 0 6px",textTransform:"uppercase" }}>Net Outflow</p>
           <p style={{ fontSize:"22px",fontWeight:800,color:totalPurchases-totalRefunds>=0?"#EF4444":"#0D9488",margin:"0 0 4px" }}>
             {fmt(Math.abs(totalPurchases - totalRefunds))}
           </p>
-          <p style={{ fontSize:"12px",color:"#94A3B8",margin:0 }}>purchases − refunds</p>
+          <p style={{ fontSize:"12px",color:"#94A3B8",margin:0 }}>purchases − refunds{totalRefundsPending > 0 ? ` · ${fmt(totalRefundsPending)} refund still pending` : ""}</p>
         </div>
       </div>
 
-      {/* Medicine approximate-stock warning */}
-      {(typeFilter === "medicine" || typeFilter === "") && (
+      {/* Live-quantity warning — MedicineBatch and GeneralItemBatch both store
+          only a live `quantity` (reduced as stock is dispensed/returned), not
+          an immutable "received" snapshot, so their purchase totals are
+          indicative rather than exact. SupplyBatch is unaffected (it keeps
+          total_cost as a snapshot), so this only applies to those two types. */}
+      {(typeFilter === "medicine" || typeFilter === "general_item" || typeFilter === "") && (
         <div style={{ background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:"10px",padding:"10px 16px",marginBottom:"18px" }}>
           <p style={{ fontSize:"12px",color:"#92400E",margin:0 }}>
-            ⚠️ <strong>Note:</strong> Medicine purchase totals are approximate — based on current stock, not the original quantity received.
+            ⚠️ <strong>Note:</strong> {typeFilter === "general_item"
+              ? "General Item"
+              : typeFilter === "medicine"
+                ? "Medicine"
+                : "Medicine and General Item"} purchase totals are approximate — based on current stock, not the original quantity received.
           </p>
         </div>
       )}
@@ -462,7 +504,7 @@ function PurchasesTab() {
                   <table style={{ width:"100%",borderCollapse:"collapse",fontSize:"12.5px" }}>
                     <thead>
                       <tr style={{ background:"#F8FAFC" }}>
-                        {["Type","Item","Batch No.","Quantity","Unit Cost","Amount","Date"].map(h => (
+                        {["Type","Item","Batch No.","Quantity","Unit Cost","Amount","Paid / Due","Status","Date"].map(h => (
                           <th key={h} style={{ padding:"9px 14px",textAlign:"left",fontWeight:700,color:"#475569",borderBottom:"1px solid #E8EDF4",whiteSpace:"nowrap" }}>{h}</th>
                         ))}
                       </tr>
@@ -470,6 +512,7 @@ function PurchasesTab() {
                     <tbody>
                       {purchases.map((p, i) => {
                         const ts = TYPE_STYLE[p.type] || { bg:"#F1F5F9",text:"#475569",icon:"📄",label:p.type };
+                        const due = Number(p.amount_due || 0);
                         return (
                           <tr key={i} style={{ borderBottom:"1px solid #F1F5F9" }}>
                             <td style={{ padding:"9px 14px" }}>
@@ -480,6 +523,11 @@ function PurchasesTab() {
                             <td style={{ padding:"9px 14px",color:"#475569" }}>{p.quantity ?? "—"}</td>
                             <td style={{ padding:"9px 14px",color:"#475569" }}>{p.unit_cost ? fmt(p.unit_cost) : "—"}</td>
                             <td style={{ padding:"9px 14px",fontWeight:800,color:"#DC2626",fontSize:"13px" }}>{fmt(p.amount)}</td>
+                            <td style={{ padding:"9px 14px",whiteSpace:"nowrap" }}>
+                              <span style={{ color:"#16A34A",fontWeight:700 }}>{fmt(p.amount_paid)}</span>
+                              {due > 0 && <span style={{ color:"#D97706",fontWeight:700 }}> / {fmt(due)} due</span>}
+                            </td>
+                            <td style={{ padding:"9px 14px" }}><SettlementBadge status={p.settlement_status} /></td>
                             <td style={{ padding:"9px 14px",color:"#64748B",whiteSpace:"nowrap" }}>{p.date || "—"}</td>
                           </tr>
                         );
@@ -489,7 +537,8 @@ function PurchasesTab() {
                       <tr style={{ background:"#F8FAFC" }}>
                         <td colSpan={5} style={{ padding:"10px 14px",fontWeight:700,color:"#0F172A",fontSize:"13px" }}>Total ({purchases.length})</td>
                         <td style={{ padding:"10px 14px",fontWeight:800,color:"#DC2626",fontSize:"14px" }}>{fmt(totalPurchases)}</td>
-                        <td />
+                        <td style={{ padding:"10px 14px",fontWeight:700,color:"#D97706",fontSize:"12.5px" }}>{fmt(totalPurchasesDue)} due</td>
+                        <td colSpan={2} />
                       </tr>
                     </tfoot>
                   </table>
@@ -514,7 +563,7 @@ function PurchasesTab() {
                   <table style={{ width:"100%",borderCollapse:"collapse",fontSize:"12.5px" }}>
                     <thead>
                       <tr style={{ background:"#F8FAFC" }}>
-                        {["Type","Item","Quantity","Amount","Reason","Status","Date"].map(h => (
+                        {["Type","Item","Quantity","Amount","Received / Pending","Reason","Return Status","Settlement","Date"].map(h => (
                           <th key={h} style={{ padding:"9px 14px",textAlign:"left",fontWeight:700,color:"#475569",borderBottom:"1px solid #E8EDF4",whiteSpace:"nowrap" }}>{h}</th>
                         ))}
                       </tr>
@@ -522,6 +571,7 @@ function PurchasesTab() {
                     <tbody>
                       {refunds.map((r, i) => {
                         const ts = TYPE_STYLE[r.type] || { bg:"#F1F5F9",text:"#475569",icon:"📄",label:r.type };
+                        const pending = Number(r.amount_pending || 0);
                         return (
                           <tr key={i} style={{ borderBottom:"1px solid #F1F5F9" }}>
                             <td style={{ padding:"9px 14px" }}>
@@ -530,12 +580,17 @@ function PurchasesTab() {
                             <td style={{ padding:"9px 14px",fontWeight:600,color:"#0F172A" }}>{r.item || r.name || "—"}</td>
                             <td style={{ padding:"9px 14px",color:"#475569" }}>{r.quantity ?? "—"}</td>
                             <td style={{ padding:"9px 14px",fontWeight:800,color:"#0D9488",fontSize:"13px" }}>{fmt(r.amount)}</td>
+                            <td style={{ padding:"9px 14px",whiteSpace:"nowrap" }}>
+                              <span style={{ color:"#0D9488",fontWeight:700 }}>{fmt(r.amount_received)}</span>
+                              {pending > 0 && <span style={{ color:"#D97706",fontWeight:700 }}> / {fmt(pending)} pending</span>}
+                            </td>
                             <td style={{ padding:"9px 14px",color:"#64748B",maxWidth:"160px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{r.reason || "—"}</td>
                             <td style={{ padding:"9px 14px" }}>
                               {r.status ? (
                                 <span style={{ padding:"2px 9px",borderRadius:"20px",fontSize:"11px",fontWeight:700,background:"#D1FAE5",color:"#065F46" }}>{r.status}</span>
                               ) : "—"}
                             </td>
+                            <td style={{ padding:"9px 14px" }}><SettlementBadge status={r.settlement_status} /></td>
                             <td style={{ padding:"9px 14px",color:"#64748B",whiteSpace:"nowrap" }}>{r.date || "—"}</td>
                           </tr>
                         );
@@ -545,6 +600,7 @@ function PurchasesTab() {
                       <tr style={{ background:"#F8FAFC" }}>
                         <td colSpan={3} style={{ padding:"10px 14px",fontWeight:700,color:"#0F172A",fontSize:"13px" }}>Total ({refunds.length})</td>
                         <td style={{ padding:"10px 14px",fontWeight:800,color:"#0D9488",fontSize:"14px" }}>{fmt(totalRefunds)}</td>
+                        <td style={{ padding:"10px 14px",fontWeight:700,color:"#D97706",fontSize:"12.5px" }}>{fmt(totalRefundsPending)} pending</td>
                         <td colSpan={3} />
                       </tr>
                     </tfoot>
@@ -783,6 +839,7 @@ function OverviewTab() {
           {card("Salary Paid", exp.salary_paid?.amount, "#5B21B6", `${exp.salary_paid?.count||0} payslips`)}
           {card("Medicine Purchases", exp.medicine_purchases?.amount, "#EA580C", `${exp.medicine_purchases?.count||0} batches`)}
           {card("Supply Purchases", exp.supply_purchases?.amount, "#0EA5E9", `${exp.supply_purchases?.count||0} batches`)}
+          {card("General Item Purchases", exp.general_item_purchases?.amount, "#C2410C", `${exp.general_item_purchases?.count||0} batches`)}
         </div>
         <p style={{ fontSize:"11px",color:"#94A3B8",margin:"10px 0 0" }}>
           Gross expenses: {fmt(exp.gross_total)} — Total refunds: {fmt(ref.total)} — Net expenses: {fmt(exp.total)}
@@ -795,6 +852,7 @@ function OverviewTab() {
         <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:"12px" }}>
           {card("Medicine Refunds", ref.medicine?.amount, "#0D9488", `${ref.medicine?.count||0} returns`)}
           {card("Supply Refunds", ref.supply?.amount, "#0D9488", `${ref.supply?.count||0} returns`)}
+          {card("General Item Refunds", ref.general_item?.amount, "#0D9488", `${ref.general_item?.count||0} returns`)}
           {card("Total Refunds", ref.total, "#0D9488")}
         </div>
       </div>

@@ -324,11 +324,20 @@ export default function LabTestsPage() {
     fetchTests();
   }, [fetchTests]);
  
-  const filteredTests = tests.filter(
-    (t) =>
-      t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      t.code.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // The backend returns tests ordered by name (its default), so re-sort
+  // here by creation time, newest first, and number rows 1..n from the
+  // top — S.No 1 is always the most recently added test.
+  const filteredTests = tests
+    .filter(
+      (t) =>
+        t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        t.code.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+    .slice()
+    .sort((a, b) => {
+      if (a.created_at && b.created_at) return new Date(b.created_at) - new Date(a.created_at);
+      return (b.test_id ?? 0) - (a.test_id ?? 0);
+    });
  
   const activeTests = filteredTests.filter((t) => t.is_active).length;
  
@@ -424,6 +433,9 @@ export default function LabTestsPage() {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ background: "#F8FAFC", borderBottom: "1px solid #EEF2F7" }}>
+                  <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: 600, color: "#64748B", width: "1%" }}>
+                    S.No
+                  </th>
                   <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: 600, color: "#64748B" }}>
                     Code
                   </th>
@@ -448,8 +460,11 @@ export default function LabTestsPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredTests.map((test) => (
+                {filteredTests.map((test, idx) => (
                   <tr key={test.test_id} style={{ borderBottom: "1px solid #EEF2F7" }}>
+                    <td style={{ padding: "12px 16px", fontSize: "13px", color: "#94A3B8" }}>
+                      {idx + 1}
+                    </td>
                     <td style={{ padding: "12px 16px", fontSize: "13px", color: "#1E293B", fontWeight: 600 }}>
                       {test.code}
                     </td>

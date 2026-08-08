@@ -88,6 +88,25 @@ export const updateBill = async (billId, payload) => {
   return res.data;
 };
 
+// ─── PHARMACY BILLS (sent from the pharmacy module) ────────────────
+// A pharmacist forwards a PAID (paid + dispensed) pharmacy bill here
+// via the pharmacy module's "Send to Reception" action. These just
+// read what's been forwarded — reception can't create/edit pharmacy
+// bills themselves.
+
+/**
+ * @param {Object} params - { date_from, date_to, search } — all optional,
+ *   date_from/date_to as 'YYYY-MM-DD'. Filters on the bill's own
+ *   bill_date, same convention the pharmacy module's own bill list uses.
+ */
+export const getPharmacyBillsForReception = async (params = {}) =>
+  fetchList("/reception/pharmacy-bills/", params);
+
+export const getPharmacyBillDetailForReception = async (billId) => {
+  const res = await API.get(`/reception/pharmacy-bills/${billId}/`);
+  return res.data;
+};
+
 /**
  * POST /api/reception/bills/{id}/pay/
  * Marks a bill as PAID. Optionally pass { payment_method, upi_reference } for UPI bills.
@@ -179,6 +198,22 @@ export const cancelPrebooking = async (pk) => {
   return res.data;
 };
 
+// ─── HOME VISIT SETTINGS ────────────────────────────────────────────
+/**
+ * GET /api/manager/home-visit-settings/
+ * Readable by receptionist/manager/admin — used to pre-fill the Home Visit
+ * fee + travel charge when reception selects "Home Visit" on a new bill,
+ * and to preview the one-time MRD registration fee on the Bill Details
+ * step before generating a new-patient bill (mrd_registration_fee is
+ * read-only here; it's still only ever changed via the admin-only
+ * Hospital Settings page).
+ * Returns { default_home_visit_fee, default_home_visit_travel_charge, mrd_registration_fee }.
+ */
+export const getHomeVisitDefaults = async () => {
+  const res = await API.get("/manager/home-visit-settings/");
+  return res.data;
+};
+
 // ─── DOCTORS ──────────────────────────────────────────────────────
 
 /**
@@ -189,6 +224,10 @@ export const cancelPrebooking = async (pk) => {
  * `profile_id`, guest doctors use `guest_doctor_id`; both use `name`/`type`).
  * Normalized here to a consistent shape (`id`, `full_name`, `doctor_type`)
  * so the rest of the app can treat both kinds of doctor the same way.
+ * Both doctor types also carry a `specialty_name` string (registered
+ * doctors: their `specialty` FK's name; guest doctors: their own
+ * always-free-text `specialization` field) — NOT the deprecated
+ * `DoctorProfile.specialization` field, which this response never reads.
  */
 const normalizeDoctor = (d) => ({
   ...d,
