@@ -17,7 +17,7 @@
 // ─────────────────────────────────────────────────────────────────
 import { useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { getBills, payBill, createBill, getPatients, getDoctors, checkFollowUp, toArray, reassignBillDoctor, cancelBill, getPrebookings, cancelPrebooking, getHomeVisitDefaults } from "../api/receptionApi";
+import { getBills, payBill, createBill, getPatients, getDoctors, checkFollowUp, toArray, reassignBillDoctor, cancelBill, getPrebookings, cancelPrebooking, getHomeVisitDefaults, getBillingDepartments } from "../api/receptionApi";
 import ConvertDialog from "../components/ConvertDialog";
 import ConfirmDialog from "../../../components/shared/ConfirmDialog";
 
@@ -618,6 +618,7 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
   const [form, setForm] = useState({
     patient:             preselectedPatient ?? null,
     doctor:              null,
+    billed_department:   null,
     fee:                 "",
     travel_charge:       "0",
     method:              "CASH",
@@ -631,6 +632,11 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
 
   const [patSearch, setPatSearch] = useState("");
   const [docSearch, setDocSearch] = useState("");
+  // Manager-curated billing-department dropdown (Step 3) — plain <select>
+  // rather than a searchable combobox since this list is expected to stay
+  // small (tens, not hundreds); see getBillingDepartments() for why it's
+  // fetched with an explicit page_size instead of relying on the default.
+  const [deptOptions, setDeptOptions] = useState([]);
   const [saving, setSaving]       = useState(false);
   const [toast,  setToast]        = useState(null);
   const [loadingHomeVisitDefaults, setLoadingHomeVisitDefaults] = useState(false);
@@ -646,6 +652,10 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
     getHomeVisitDefaults()
       .then(defaults => setMrdFee(parseFloat(defaults.mrd_registration_fee ?? 0)))
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    getBillingDepartments().then(setDeptOptions).catch(() => {});
   }, []);
 
   // ── Auto-run follow-up check when patient is preselected ──────
@@ -717,11 +727,22 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
     } catch { /* silently ignore */ }
   };
 
+  // Convenience pre-fill only — matches the doctor's free-text `department`
+  // against the manager-curated BillingDepartment list by name. The backend
+  // does its own authoritative match/override if billed_department is left
+  // null, so no need to handle a "no match" case here beyond falling back
+  // to null (→ "Auto" in the dropdown).
+  const matchBillingDepartment = (d) =>
+    deptOptions.find(
+      o => o.name.toLowerCase() === (d.department ?? "").trim().toLowerCase()
+    ) ?? null;
+
   // ── Active doctor select ──────────────────────────────────────
   const handleSelectActiveDoctor = (d) => {
     setForm(f => ({
       ...f,
       doctor: d,
+      billed_department: matchBillingDepartment(d),
       fee:    f.type === "REVISIT" ? "0" : String(d.consultation_fee ?? "0"),
     }));
     setDocSearch("");
@@ -732,6 +753,7 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
     setForm(f => ({
       ...f,
       doctor: d,
+      billed_department: matchBillingDepartment(d),
       fee:    f.type === "REVISIT" ? "0" : String(d.consultation_fee ?? "0"),
     }));
     // Pre-fill name from the profile, ensuring "Dr." prefix
@@ -842,6 +864,9 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
         discount_amount:  isNaN(discountVal) ? 0 : discountVal,
         ...(form.method === "UPI" && { upi_reference: form.upi_reference }),
         ...(form.notes.trim()    && { notes: form.notes }),
+        // Only sent when reception explicitly overrides — leaving it out lets
+        // the backend's own doctor-department auto-match apply as the default.
+        ...(form.billed_department?.department_id && { billed_department: form.billed_department.department_id }),
       };
 
       if (doctorMode === "active") {
@@ -1303,6 +1328,26 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
                 </div>
               </div>
 
+              {/* Billed Department */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "18px" }}>
+                <label style={labelStyle}>Billed Department</label>
+                <select
+                  style={{ padding: "11px 14px", borderRadius: "9px", border: "1.5px solid #E8EDF4", fontSize: "14px", color: "#1E293B", background: "#fff", cursor: "pointer", outline: "none" }}
+                  value={form.billed_department?.department_id ?? ""}
+                  onChange={e => {
+                    const dept = deptOptions.find(o => String(o.department_id) === e.target.value) ?? null;
+                    set("billed_department", dept);
+                  }}>
+                  <option value="">Auto (doctor's own department)</option>
+                  {deptOptions.map(d => (
+                    <option key={d.department_id} value={d.department_id}>{d.name}</option>
+                  ))}
+                </select>
+                <p style={{ fontSize: "11px", color: "#94A3B8", margin: 0 }}>
+                  Defaults to {form.doctor?.department || "the selected doctor's own department"} — change this if the patient is actually being billed under a different department (e.g. seen in Emergency).
+                </p>
+              </div>
+
               {/* UPI Reference */}
               {form.method === "UPI" && (
                 <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "18px" }}>
@@ -1405,7 +1450,7 @@ function BillCreator({ onClose, onCreated, patients, doctors, preselectedPatient
                           ? `${guestDoctorName.trim()} · Guest`
                           : `${commonName.trim()} (Guest)` },
                     { l: "Type",     v: form.type === "REVISIT" ? "Revisit Consultation" : form.type === "HOME_VISIT" ? "Home Visit" : "New Consultation" },
-                    { l: form.type === "HOME_VISIT" ? "Home Visit Fee" : "Consultation Fee", v: `₹${form.fee || "0"}` },
+                    { l: `${form.type === "HOME_VISIT" ? "Home Visit Fee" : "Consultation Fee"} (${form.billed_department?.name ?? form.doctor?.department ?? "Auto"})`, v: `₹${form.fee || "0"}` },
                     ...(form.type === "HOME_VISIT" && parseFloat(form.travel_charge || 0) > 0
                       ? [{ l: "Travel Charge", v: `₹${parseFloat(form.travel_charge).toLocaleString("en-IN")}` }]
                       : []),
@@ -1772,8 +1817,8 @@ export default function BillingPage({ quickBookPatient, onQuickBookClose }) {
         </div>
 
         {/* Column headers */}
-        <div style={{ display: "grid", gridTemplateColumns: "2.2fr 1.6fr 1.1fr 1.1fr 1fr 110px", padding: "10px 20px", background: "#F8FAFC", borderBottom: "1px solid #F1F5F9" }}>
-          {["Patient & Doctor", "Bill No. / OP No.", "Date", "Amount", "Status", "Action"].map((h, i) => (
+        <div style={{ display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr 1fr 1fr 1fr 110px", padding: "10px 20px", background: "#F8FAFC", borderBottom: "1px solid #F1F5F9" }}>
+          {["Patient & Doctor", "Bill No. / OP No.", "Department", "Date", "Amount", "Status", "Action"].map((h, i) => (
             <div key={i} style={{ fontSize: "11px", fontWeight: 600, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.5px" }}>{h}</div>
           ))}
         </div>
@@ -1795,7 +1840,7 @@ export default function BillingPage({ quickBookPatient, onQuickBookClose }) {
           const canCancel = b.consultation_status === "STARTED";
           return (
             <div key={b.bill_id ?? i}
-              style={{ display: "grid", gridTemplateColumns: "2.2fr 1.6fr 1.1fr 1.1fr 1fr 110px", padding: "13px 20px", borderBottom: "1px solid #F8FAFC", alignItems: "center", transition: "background 0.1s", opacity: isCancelled ? 0.6 : 1 }}
+              style={{ display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr 1fr 1fr 1fr 110px", padding: "13px 20px", borderBottom: "1px solid #F8FAFC", alignItems: "center", transition: "background 0.1s", opacity: isCancelled ? 0.6 : 1 }}
               onMouseEnter={e => e.currentTarget.style.background = "#FAFBFD"}
               onMouseLeave={e => e.currentTarget.style.background = "transparent"}
             >
@@ -1831,6 +1876,11 @@ export default function BillingPage({ quickBookPatient, onQuickBookClose }) {
                   <div style={{ fontSize: "11px", color: "#94A3B8" }}>{b.op_number}</div>
                 )}
               </div>
+
+              {/* Department */}
+              <span style={{ fontSize: "12.5px", color: "#475569" }}>
+                {b.billed_department_name ?? "—"}
+              </span>
 
               {/* Date */}
               <span style={{ fontSize: "13px", color: "#475569" }}>

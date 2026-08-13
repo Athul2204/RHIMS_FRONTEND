@@ -246,6 +246,29 @@ export const getDoctors = async () => {
   };
 };
 
+// ─── BILLING DEPARTMENTS ────────────────────────────────────────────
+/**
+ * GET /administration/billing-departments/?search=<q>
+ * Manager-curated list of departments a consultation can be billed
+ * against (e.g. General Medicine, Paediatrics, Emergency) — independent
+ * of the doctor's own home department. Used to populate the dropdown in
+ * Step 3 of bill creation. Always active-only for reception (enforced
+ * server-side).
+ *
+ * NOTE: this endpoint is paginated server-side (StandardPagination,
+ * default page_size=10, max 100) — same as /reception/patients/ and
+ * /reception/bills/. Left unpaginated here, a plain fetch would silently
+ * cap the dropdown at 10 departments. Following the same fix already
+ * used for getBills()/getPatients() above, we pass an explicit
+ * page_size so the dropdown always has the full active list.
+ */
+export const getBillingDepartments = async (search = "") => {
+  const res = await API.get("/administration/billing-departments/", {
+    params: { page_size: 100, ...(search ? { search } : {}) },
+  });
+  return toArray(res.data);
+};
+
 // ─── HELPERS ──────────────────────────────────────────────────────
 
 /** Normalise paginated or plain-list API response to a plain array */

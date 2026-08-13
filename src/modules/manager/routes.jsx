@@ -10,6 +10,7 @@ import ExpensesPage         from "./pages/ExpensesPage";
 import IncomePage           from "./pages/IncomePage";
 import DealersPage          from "./pages/DealersPage";
 import ProceduresPage       from "./pages/ProceduresPage";
+import BillingDepartmentsPage from "./pages/BillingDepartmentsPage";
 import WebsiteManagementPage from "./pages/WebsiteManagementPage";
 
 export default function ManagerRoutes() {
@@ -25,6 +26,7 @@ export default function ManagerRoutes() {
       <Route path="income"          element={<IncomePage />} />
       <Route path="dealers"         element={<DealersPage />} />
       <Route path="procedures"      element={<ProceduresPage />} />
+      <Route path="billing-departments" element={<BillingDepartmentsPage />} />
       <Route path="website"         element={<WebsiteManagementPage />} />
       <Route path="*"               element={<Navigate to="/manager" replace />} />
     </Routes>

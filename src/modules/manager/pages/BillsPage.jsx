@@ -479,7 +479,7 @@ export default function BillsPage() {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12.5px" }}>
               <thead>
                 <tr style={{ background: "#F8FAFC" }}>
-                  {["Bill No.", "Date", "Source", "Patient / Details", "Method", "Amount", "Status (Invoice / Payment)", ""].map(h => (
+                  {["Bill No.", "Date", "Source", "Patient / Details", "Department", "Method", "Amount", "Status (Invoice / Payment)", ""].map(h => (
                     <th key={h} style={{ padding: "10px 14px", textAlign: "left", fontWeight: 700, color: "#475569", borderBottom: "1px solid #E8EDF4", whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -512,6 +512,7 @@ export default function BillsPage() {
                           </span>
                         )}
                       </td>
+                      <td style={{ padding: "10px 14px", color: "#64748B" }}>{b.billed_department_name ?? "—"}</td>
                       <td style={{ padding: "10px 14px", color: "#64748B", textTransform: "capitalize" }}>{b.payment_method ? b.payment_method.replace("_", " ") : "—"}</td>
                       <td style={{ padding: "10px 14px", fontWeight: 800, color: "#0F172A", fontSize: "13px" }}>{fmt(b.amount)}</td>
                       <td style={{ padding: "10px 14px" }}>
@@ -546,7 +547,7 @@ export default function BillsPage() {
               </tbody>
               <tfoot>
                 <tr style={{ background: "#F8FAFC" }}>
-                  <td colSpan={5} style={{ padding: "12px 14px", fontWeight: 700, color: "#0F172A", fontSize: "13px" }}>Total ({filtered.length} bills)</td>
+                  <td colSpan={6} style={{ padding: "12px 14px", fontWeight: 700, color: "#0F172A", fontSize: "13px" }}>Total ({filtered.length} bills)</td>
                   <td style={{ padding: "12px 14px", fontWeight: 800, color: "#6366F1", fontSize: "14px" }}>{fmt(filtered.reduce((s, b) => s + Number(b.amount || 0), 0))}</td>
                   <td />
                   <td />
@@ -613,6 +614,12 @@ export default function BillsPage() {
                       <div>
                         <p style={{ fontSize: "10.5px", color: "#94A3B8", fontWeight: 600, textTransform: "uppercase", margin: "0 0 2px" }}>Doctor</p>
                         <p style={{ fontSize: "13.5px", color: "#0F172A", fontWeight: 600, margin: 0 }}>{detail.doctor_name}</p>
+                      </div>
+                    )}
+                    {detail.billed_department_name && (
+                      <div>
+                        <p style={{ fontSize: "10.5px", color: "#94A3B8", fontWeight: 600, textTransform: "uppercase", margin: "0 0 2px" }}>Billed Department</p>
+                        <p style={{ fontSize: "13.5px", color: "#0F172A", fontWeight: 600, margin: 0 }}>{detail.billed_department_name}</p>
                       </div>
                     )}
                     <div>

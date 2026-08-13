@@ -3,9 +3,16 @@ import { useEffect, useState, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { getBillDetail } from "../api/receptionApi";
 import { flattenFormError } from "../../../utils/formErrors";
+import logo from "../../../assets/RHIMS LOGO.png";
 
 const G = "#16A34A";
-const LIGHT_G = "#DCFCE7";
+
+// ── Fallbacks only — used if the bill payload doesn't include branch
+// details for some reason. The real values are pulled from the branch
+// (bill.branch_name / bill.branch_address / bill.branch_phone) below. ──
+const FALLBACK_NAME = "RHIMS Hospital";
+const FALLBACK_ADDRESS = "";
+const FALLBACK_PHONE = "";
 
 const Ico = ({ d, size = 16, color = "currentColor" }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
@@ -16,8 +23,18 @@ const Ico = ({ d, size = 16, color = "currentColor" }) => (
 const ICONS = {
   print: "M6 9V2h12v7 M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2 M6 14h12v8H6z",
   back: "M19 12H5 M12 19l-7-7 7-7",
-  check: "M20 6 9 17l-5-5",
 };
+
+// Plain label:value row used in the metadata grid — no borders, just
+// aligned columns, matching the reference bill's layout.
+function InfoRow({ label, value }) {
+  return (
+    <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
+      <span style={{ color: "#334155", minWidth: 84, flexShrink: 0, fontSize: 11 }}>{label}</span>
+      <span style={{ fontWeight: 600, color: "#0F172A", fontSize: 11 }}>{value ?? "—"}</span>
+    </div>
+  );
+}
 
 export default function PrintConsultationBillPage() {
   const { billId } = useParams();
@@ -63,8 +80,33 @@ export default function PrintConsultationBillPage() {
   const discountAmt = parseFloat(bill.discount_amount ?? 0);
   const subtotalFee = baseFee + regFee;
 
+  const ageGender = [bill.patient_age != null ? `${bill.patient_age}` : null, bill.patient_gender]
+    .filter(Boolean)
+    .join(" / ") || "—";
+
+  // Branch details — same "Branch Management" record shown in the admin
+  // (name / address / phone), fetched with the bill rather than hardcoded.
+  const branchName = bill.branch_name || FALLBACK_NAME;
+  const branchAddress = bill.branch_address || FALLBACK_ADDRESS;
+  const branchPhone = bill.branch_phone || FALLBACK_PHONE;
+
+  // Line items for the fee table — same data as before, just rendered
+  // with S.No like the reference bill's table.
+  const lineItems = [
+    {
+      label: "Consultation Fee",
+      tag: [
+        bill.consultation_type === "REVISIT" ? "Revisit" : null,
+        bill.billed_department_name || null,
+      ].filter(Boolean).join(" · "),
+      amount: baseFee,
+    },
+    ...(regFee > 0 ? [{ label: "MRD Registration Fee (One-time)", amount: regFee }] : []),
+    ...(discountAmt > 0 ? [{ label: "Discount", amount: -discountAmt, isDiscount: true }] : []),
+  ];
+
   return (
-    <div style={{ fontFamily: "'Inter', sans-serif", maxWidth: "148mm", margin: "0 auto", padding: "16px 16px 40px" }}>
+    <div style={{ fontFamily: "'Inter', sans-serif", maxWidth: "210mm", margin: "0 auto", padding: "16px 16px 40px" }}>
       {/* ── Screen-only toolbar ── */}
       <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <button onClick={() => navigate(-1)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "1.5px solid #E2E8F0", background: "#fff", cursor: "pointer", fontSize: 13, fontWeight: 600, color: "#64748B" }}>
@@ -80,114 +122,92 @@ export default function PrintConsultationBillPage() {
         background: "#fff",
         border: "1px solid #E5E7EB",
         borderRadius: 12,
-        padding: "24px",
+        padding: "16px",
         boxShadow: "0 4px 20px rgba(0,0,0,0.05)",
         boxSizing: "border-box",
-        minHeight: "210mm",
+        minHeight: "120mm",
         display: "flex",
         flexDirection: "column",
-        justifyContent: "space-between"
+        justifyContent: "space-between",
+        color: "#0F172A",
       }}>
         <div>
-          {/* Header */}
-          <div style={{ textAlign: "center", borderBottom: "2px solid #F1F5F9", paddingBottom: 12, marginBottom: 16 }}>
-            <h1 style={{ fontSize: 20, fontWeight: 800, color: "#0F172A", margin: "0 0 2px" }}>RHIMS Hospital</h1>
-            <p style={{ fontSize: 12, color: "#64748B", margin: 0, fontWeight: 500, letterSpacing: "0.5px", textTransform: "uppercase" }}>OP Consultation Receipt</p>
+          {/* Header — logo pinned left, clinic details centered, like the
+              reference bill's masthead */}
+          <div style={{ position: "relative", textAlign: "center", paddingBottom: 4, marginBottom: 6 }}>
+            <img
+              src={logo}
+              alt={branchName}
+              style={{ position: "absolute", left: 90, top: 0, height: 70, width: 110 }}
+            />
+            <h1 style={{ fontSize: 16, fontWeight: 800, margin: "0 0 2px", color: "#0F172A" }}>{branchName}</h1>
+            {branchAddress && (
+              <p style={{ fontSize: 10.5, color: "#334155", margin: 0, lineHeight: 1.3 }}>{branchAddress}</p>
+            )}
+            {branchPhone && (
+              <p style={{ fontSize: 10.5, color: "#334155", margin: "1px 0 0" }}>Ph: {branchPhone}</p>
+            )}
           </div>
 
-          {/* Metadata */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px", marginBottom: 16, fontSize: 12.5 }}>
-            {[
-              ["Bill No.", bill.bill_number],
-              ["OP Number", bill.op_number],
-              ["Date", formattedDate],
-            ].map(([label, value]) => (
-              <div key={label} style={{ display: "flex", gap: 6 }}>
-                <span style={{ color: "#94A3B8", minWidth: 90, flexShrink: 0 }}>{label}:</span>
-                <span style={{ fontWeight: 600, color: "#1E293B" }}>{value}</span>
-              </div>
-            ))}
-          </div>
+          <div style={{ borderBottom: "2px solid #0F172A", marginBottom: 8 }} />
 
-          {/* Divider */}
-          <div style={{ borderTop: "1px solid #F1F5F9", margin: "14px 0" }} />
+          <h2 style={{ textAlign: "center", fontSize: 14, fontWeight: 800, margin: "0 0 10px", color: "#0F172A" }}>
+            Visit Bill
+          </h2>
 
-          {/* Patient Details */}
-          <div style={{ marginBottom: 16 }}>
-            <p style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.6px", margin: "0 0 8px" }}>Patient Details</p>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px", fontSize: 12.5 }}>
-              {[
-                ["MRD Number", bill.patient_mrd || "—"],
-                ["Name", bill.patient_name || "—"],
-                ["Age / Gender", [bill.patient_age != null ? `${bill.patient_age} Yrs` : null, bill.patient_gender].filter(Boolean).join(" / ") || "—"],
-                ["Phone", bill.patient_phone || "—"],
-              ].map(([label, value]) => (
-                <div key={label} style={{ display: "flex", gap: 6 }}>
-                  <span style={{ color: "#94A3B8", minWidth: 90, flexShrink: 0 }}>{label}:</span>
-                  <span style={{ fontWeight: 600, color: "#1E293B" }}>{value}</span>
-                </div>
-              ))}
+          {/* Metadata + Patient Details — plain two-column grid, no cell
+              borders, matching the reference bill's layout */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 20px", marginBottom: 10 }}>
+            <div>
+              <InfoRow label="MRD No." value={bill.patient_mrd} />
+              <InfoRow label="Patient Name" value={bill.patient_name} />
+              <InfoRow label="Phone" value={bill.patient_phone} />
+              <InfoRow label="OP Number" value={bill.op_number} />
+            </div>
+            <div>
+              <InfoRow label="Date" value={formattedDate} />
+              <InfoRow label="Age / Gender" value={ageGender} />
+              <InfoRow label="Doctor Name" value={bill.doctor_name} />
+              <InfoRow label="Bill No." value={bill.bill_number} />
             </div>
           </div>
 
-          {/* Divider */}
-          <div style={{ borderTop: "1px solid #F1F5F9", margin: "14px 0" }} />
-
-          {/* Consulting Details */}
-          <div style={{ marginBottom: 20 }}>
-            <p style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.6px", margin: "0 0 8px" }}>Consultation Details</p>
-            <div style={{ fontSize: 12.5, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 12px" }}>
-              <div style={{ display: "flex", gap: 6 }}>
-                <span style={{ color: "#94A3B8", minWidth: 90, flexShrink: 0 }}>Doctor:</span>
-                <span style={{ fontWeight: 600, color: "#1E293B" }}>{bill.doctor_name || "—"}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Fees Breakdown Table */}
-          <div style={{ marginBottom: 16 }}>
-            <p style={{ fontSize: 10.5, fontWeight: 700, color: "#94A3B8", textTransform: "uppercase", letterSpacing: "0.6px", margin: "0 0 8px" }}>Fees Breakdown</p>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-              <thead>
-                <tr style={{ background: "#F8FAFC" }}>
-                  <th style={{ padding: "6px 10px", textAlign: "left", fontSize: 10.5, fontWeight: 700, color: "#64748B", borderBottom: "1px solid #E2E8F0" }}>Description</th>
-                  <th style={{ padding: "6px 10px", textAlign: "right", fontSize: 10.5, fontWeight: 700, color: "#64748B", borderBottom: "1px solid #E2E8F0" }}>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr style={{ borderBottom: "1px solid #F1F5F9" }}>
-                  <td style={{ padding: "8px 10px", color: "#475569" }}>
-                    Consultation Fee {bill.consultation_type === "REVISIT" && <span style={{ fontSize: 10.5, color: "#2563EB", fontWeight: 600 }}>(Revisit)</span>}
+          {/* Fees table — boxed borders, S.No column, matching the
+              reference bill's SI No / Description / Amount table */}
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, border: "1.3px solid #0F172A" }}>
+            <thead>
+              <tr>
+                <th style={{ width: 40, padding: "5px 8px", textAlign: "left", fontSize: 10.5, fontWeight: 700, borderBottom: "1.3px solid #0F172A", borderRight: "1px solid #0F172A" }}>SI No</th>
+                <th style={{ padding: "5px 8px", textAlign: "left", fontSize: 10.5, fontWeight: 700, borderBottom: "1.3px solid #0F172A", borderRight: "1px solid #0F172A" }}>Description</th>
+                <th style={{ padding: "5px 8px", textAlign: "right", fontSize: 10.5, fontWeight: 700, borderBottom: "1.3px solid #0F172A" }}>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lineItems.map((item, i) => (
+                <tr key={item.label}>
+                  <td style={{ padding: "5px 8px", borderRight: "1px solid #0F172A", borderBottom: i === lineItems.length - 1 ? "none" : "1px solid #E2E8F0" }}>{i + 1}</td>
+                  <td style={{ padding: "5px 8px", borderRight: "1px solid #0F172A", borderBottom: i === lineItems.length - 1 ? "none" : "1px solid #E2E8F0", color: item.isDiscount ? "#DC2626" : "#0F172A" }}>
+                    {item.label}{item.tag && <span style={{ fontSize: 10, color: "#2563EB", fontWeight: 600 }}> ({item.tag})</span>}
                   </td>
-                  <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "#0F172A" }}>₹{baseFee.toFixed(2)}</td>
+                  <td style={{ padding: "5px 8px", textAlign: "right", fontWeight: 600, borderBottom: i === lineItems.length - 1 ? "none" : "1px solid #E2E8F0", color: item.isDiscount ? "#DC2626" : "#0F172A" }}>
+                    {item.isDiscount ? "− " : ""}₹{Math.abs(item.amount).toFixed(2)}
+                  </td>
                 </tr>
-                {regFee > 0 && (
-                  <tr style={{ borderBottom: "1px solid #F1F5F9" }}>
-                    <td style={{ padding: "8px 10px", color: "#475569" }}>MRD Registration Fee (One-time)</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "#0F172A" }}>₹{regFee.toFixed(2)}</td>
-                  </tr>
-                )}
-                {discountAmt > 0 && (
-                  <tr style={{ borderBottom: "1px solid #F1F5F9" }}>
-                    <td style={{ padding: "8px 10px", color: "#DC2626" }}>Discount</td>
-                    <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 600, color: "#DC2626" }}>− ₹{discountAmt.toFixed(2)}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
 
           {/* Total */}
-          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
             <div style={{ width: "220px" }}>
               {discountAmt > 0 && (
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: "#64748B", marginBottom: 4 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: "#334155", marginBottom: 4 }}>
                   <span>Subtotal:</span>
                   <span>₹{subtotalFee.toFixed(2)}</span>
                 </div>
               )}
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, fontWeight: 700, color: "#0F172A", paddingTop: 8, borderTop: `2px solid #0F172A` }}>
-                <span>Total Amount:</span>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15, fontWeight: 800, paddingTop: 8, borderTop: "2px solid #0F172A" }}>
+                <span>Total Amount</span>
                 <span>₹{totalFee.toFixed(2)}</span>
               </div>
             </div>
@@ -195,9 +215,8 @@ export default function PrintConsultationBillPage() {
         </div>
 
         {/* Footer */}
-        <div style={{ marginTop: 24, paddingTop: 12, borderTop: "1px dashed #E2E8F0", textAlign: "center" }}>
-          <p style={{ fontSize: 10.5, color: "#94A3B8", margin: 0 }}>Thank you for choosing RHIMS Hospital</p>
-          <p style={{ fontSize: 9.5, color: "#CBD5E1", margin: "2px 0 0" }}>This is a computer-generated receipt. No signature required.</p>
+        <div style={{ marginTop: 10, paddingTop: 6, borderTop: "1px dashed #E2E8F0", textAlign: "center" }}>
+          <p style={{ fontSize: 10, color: "#94A3B8", margin: 0 }}>Thank you for choosing {branchName}</p>
         </div>
       </div>
 
@@ -211,7 +230,7 @@ export default function PrintConsultationBillPage() {
             background: #fff;
           }
           @page {
-            size: A5 portrait;
+            size: A5 landscape;
             margin: 8mm;
           }
           #bill-print {

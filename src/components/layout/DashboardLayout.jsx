@@ -144,6 +144,7 @@ const NAV = {
       { label: "Income",        to: "/manager/income",         icon: "billing" },
       { label: "Dealers",        to: "/manager/dealers",        icon: "dealer" },
       { label: "Procedures",     to: "/manager/procedures",     icon: "procedure" },
+      { label: "Billing Departments", to: "/manager/billing-departments", icon: "building" },
     ],
     reports: [
       { label: "Bills Overview", to: "/manager/bills",          icon: "monthlyReport" },

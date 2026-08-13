@@ -318,3 +318,30 @@ export const deleteProcedure = async (id) => {
   const res = await API.delete(`/administration/procedures/${id}/`);
   return res.data;
 };
+
+// ─── BILLING DEPARTMENTS ────────────────────────────────────────────
+// Same shape as Procedures above — manager-curated master list, same
+// backend permission (IsAdminOrManager for writes).
+export const getBillingDepartmentList = async (arg = {}) => {
+  return fetchList("/administration/billing-departments/", arg);
+};
+
+export const createBillingDepartment = async (payload) => {
+  const res = await API.post("/administration/billing-departments/", payload);
+  return res.data;
+};
+
+export const updateBillingDepartment = async (id, payload) => {
+  const res = await API.put(`/administration/billing-departments/${id}/`, payload);
+  return res.data;
+};
+
+export const patchBillingDepartment = async (id, payload) => {
+  const res = await API.patch(`/administration/billing-departments/${id}/`, payload);
+  return res.data;
+};
+
+export const deleteBillingDepartment = async (id) => {
+  const res = await API.delete(`/administration/billing-departments/${id}/`);
+  return res.data;
+};
