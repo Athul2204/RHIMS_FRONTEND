@@ -286,10 +286,15 @@ export default function Login() {
             <button
               type="submit"
               disabled={loading}
+              style={
+                loading
+                  ? undefined
+                  : { backgroundImage: "linear-gradient(to right, #0891b2, #2563eb)" }
+              }
               className={`w-full h-14 sm:h-16 rounded-full font-semibold text-white text-base transition-all duration-200 ${
                 loading
                   ? "bg-cyan-300 cursor-not-allowed"
-                  : "bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 active:scale-[0.99]"
+                  : "hover:opacity-90 active:scale-[0.99]"
               }`}
             >
               {loading ? "Signing In..." : "Login"}
