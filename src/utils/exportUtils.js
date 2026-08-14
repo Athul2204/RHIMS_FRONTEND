@@ -7,10 +7,11 @@
 //
 // Requires two new frontend deps (not previously in package.json):
 //   npm install xlsx jspdf jspdf-autotable
-
-import * as XLSX from "xlsx";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+//
+// xlsx and jspdf/jspdf-autotable are loaded via dynamic import() inside each
+// export function below (not as static imports) so that pages which render
+// <ExportButtons/> don't ship ~700kB of PDF/Excel libs in their own chunk —
+// the libs are only fetched the moment a user actually clicks Export.
 
 /**
  * @param {Array<object>} rows - raw data rows
@@ -40,11 +41,12 @@ export function formatDateRangeLabel(range) {
   return from || to || "";
 }
 
-export function exportToExcel({ rows, columns, filename, sheetName = "Sheet1" }) {
+export async function exportToExcel({ rows, columns, filename, sheetName = "Sheet1" }) {
   if (!rows || rows.length === 0) {
     alert("Nothing to export for the selected range.");
     return;
   }
+  const XLSX = await import("xlsx");
   const shaped = shapeRows(rows, columns);
   const ws = XLSX.utils.json_to_sheet(shaped);
   const wb = XLSX.utils.book_new();
@@ -52,11 +54,15 @@ export function exportToExcel({ rows, columns, filename, sheetName = "Sheet1" })
   XLSX.writeFile(wb, `${filename}.xlsx`);
 }
 
-export function exportToPDF({ rows, columns, filename, title, dateRange }) {
+export async function exportToPDF({ rows, columns, filename, title, dateRange }) {
   if (!rows || rows.length === 0) {
     alert("Nothing to export for the selected range.");
     return;
   }
+  const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+    import("jspdf"),
+    import("jspdf-autotable"),
+  ]);
   const doc = new jsPDF({ orientation: columns.length > 6 ? "landscape" : "portrait" });
   doc.setFontSize(14);
   doc.text(title || filename, 14, 15);
