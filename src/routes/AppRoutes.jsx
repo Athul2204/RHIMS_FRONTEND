@@ -1,4 +1,5 @@
 // src/routes/AppRoutes.jsx
+import { Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import { AuthProvider } from "../context/AuthContext";
@@ -8,16 +9,26 @@ import ProtectedRoute from "./ProtectedRoute";
 import Login from "../pages/auth/Login";
 
 // Role dashboards (each wraps its own module router + DashboardLayout)
-import AdminDashboard from "../pages/admin/AdminDashboard";
-import DoctorDashboard from "../pages/doctor/DoctorDashboard";
-import ReceptionDashboard from "../pages/receptionist/ReceptionDashboard";
-import PharmacyDashboard from "../pages/pharmacist/PharmacyDashboard";
-import LabDashboard from "../pages/lab/LabDashboard";
-import ManagerDashboard from "../pages/manager/ManagerDashboard";
+// Lazy-loaded so a given user only downloads the code for their own role,
+// instead of every role's module landing in the single main bundle.
+const AdminDashboard = lazy(() => import("../pages/admin/AdminDashboard"));
+const DoctorDashboard = lazy(() => import("../pages/doctor/DoctorDashboard"));
+const ReceptionDashboard = lazy(() => import("../pages/receptionist/ReceptionDashboard"));
+const PharmacyDashboard = lazy(() => import("../pages/pharmacist/PharmacyDashboard"));
+const LabDashboard = lazy(() => import("../pages/lab/LabDashboard"));
+const ManagerDashboard = lazy(() => import("../pages/manager/ManagerDashboard"));
 
 // Utility pages
 import Unauthorized from "../pages/Unauthorized";
 import NotFound from "../pages/NotFound";
+
+function RouteFallback() {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh" }}>
+      Loading…
+    </div>
+  );
+}
 
 function AppRoutes() {
   return (

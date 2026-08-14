@@ -12,6 +12,7 @@ import {
   resolveAlert,
   getUsageLogs,
 } from "../api/suppliesApi";
+import { getDealers } from "../api/pharmacistApi";
 
 // ─────────────────────────────────────────────────────────────
 // DESIGN TOKENS
@@ -945,9 +946,7 @@ function StockTab({ items, loading, showToast, onRefreshSummary }) {
 
   useEffect(() => {
     let cancelled = false;
-    import("../api/pharmacistApi").then(({ getDealers }) => {
-      getDealers().then((list) => { if (!cancelled) setDealers(list || []); }).catch(() => {});
-    });
+    getDealers().then((list) => { if (!cancelled) setDealers(list || []); }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 

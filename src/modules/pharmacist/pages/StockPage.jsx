@@ -16,8 +16,10 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { 
   getMedicines,
-  getBatches
+  getBatches,
+  getDealers
 } from "../api/pharmacistApi";
+import API from "../../../api";
 
 // ─────────────────────────────────────────────────────────
 // DESIGN TOKENS
@@ -174,13 +176,11 @@ function ReturnToProviderModal({ availableBatches, onClose, onSuccess }) {
 
   useEffect(() => {
     let cancelled = false;
-    import("../api/pharmacistApi").then(({ getDealers }) => {
-      getDealers()
-        .then((list) => { if (!cancelled) setDealers(list || []); })
-        .catch((e) => {
-          if (!cancelled) setDealersError(`Failed to load dealers: ${e?.message || e}`);
-        });
-    });
+    getDealers()
+      .then((list) => { if (!cancelled) setDealers(list || []); })
+      .catch((e) => {
+        if (!cancelled) setDealersError(`Failed to load dealers: ${e?.message || e}`);
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -230,8 +230,7 @@ function ReturnToProviderModal({ availableBatches, onClose, onSuccess }) {
   const handleReturn = async () => {
     setBusy(true);
     try {
-      const API = (await import("../../../api")).default;
-      
+            
       const payload = {
         batch_id: selectedBatch.batch_id,
         quantity: parseInt(quantity),
@@ -648,8 +647,7 @@ function EditBatchModal({ batch, onClose, onSuccess }) {
 
     setBusy(true);
     try {
-      const API = (await import("../../../api")).default;
-      
+            
       // 🔴 IMPORTANT: Send the CALCULATED total, not the input
       await API.patch(`/pharmacist/batches/${batch.batch_id}/update/`, {
         batch_number: formData.batch_number,
@@ -920,9 +918,7 @@ function AddBatchModal({ medicine, onClose, onSuccess }) {
 
   useEffect(() => {
     let cancelled = false;
-    import("../api/pharmacistApi").then(({ getDealers }) => {
-      getDealers().then((list) => { if (!cancelled) setDealers(list || []); }).catch(() => {});
-    });
+    getDealers().then((list) => { if (!cancelled) setDealers(list || []); }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
 
@@ -957,8 +953,7 @@ function AddBatchModal({ medicine, onClose, onSuccess }) {
     setBusy(true);
     setApiError("");
     try {
-      const API = (await import("../../../api")).default;
-      await API.post("/pharmacist/batches/create/", {
+            await API.post("/pharmacist/batches/create/", {
         medicine_id: medicine.medicine_id,
         batch_number: formData.batch_number,
         quantity: parseInt(formData.quantity),
